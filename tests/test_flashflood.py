@@ -42,7 +42,7 @@ class TestFlashFlood(unittest.TestCase):
     def test_urls(self):
         self.generate_events()
         self.generate_events()
-        resp = self.flashflood.get_presigned_event_urls()
+        resp = self.flashflood.event_urls()
         for timestamp, event_id, event_data in flashflood.events_for_presigned_urls(resp):
             print(event_id)
 
