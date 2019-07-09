@@ -30,6 +30,7 @@ class FlashFlood:
         self.bucket = s3.Bucket(bucket)
         self.root_prefix = root_prefix
         self._collation_pfx = f"{root_prefix}/collations"
+        self._blobs_pfx = f"{root_prefix}/blobs"
         self._new_pfx = f"{root_prefix}/new"
 
     def put(self, data, event_id: str=None, timestamp: str=None):
@@ -40,9 +41,9 @@ class FlashFlood:
         collation_id = timestamp + ID_PART_DELIMITER + timestamp
         manifest = dict(collation_id=collation_id,
                         events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
-        self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
+        self.bucket.Object(f"{self._blobs_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
         manifest_data = json.dumps(manifest).encode("utf-8")
-        self.bucket.Object(f"{self._collation_pfx}/{collation_id}.manifest").upload_fileobj(io.BytesIO(manifest_data))
+        self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(manifest_data))
         self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
 
     def collate(self, minimum_number_of_events=10):
@@ -56,29 +57,34 @@ class FlashFlood:
                 events.append(i)
             data += part_data
             key = f"{self._collation_pfx}/{collation_id}"
-            items_to_delete.append(s3.ObjectSummary(self.bucket.name, key))
-            items_to_delete.append(s3.ObjectSummary(self.bucket.name, key + ".manifest"))
+            items_to_delete.append(s3.ObjectSummary(self.bucket.name, f"{self._blobs_pfx}/{collation_id}"))
+            items_to_delete.append(s3.ObjectSummary(self.bucket.name, f"{self._collation_pfx}/{collation_id}"))
             items_to_delete.append(s3.ObjectSummary(self.bucket.name, f"{self._new_pfx}/{collation_id}"))
         collation_id = events[0]['timestamp'] + ID_PART_DELIMITER + events[-1]['timestamp']
-        self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
+        self.bucket.Object(f"{self._blobs_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
         manifest_data = json.dumps(dict(collation_id=collation_id, events=events)).encode("utf-8")
-        self.bucket.Object(f"{self._collation_pfx}/{collation_id}.manifest").upload_fileobj(io.BytesIO(manifest_data))
+        self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(manifest_data))
         _delete_items(items_to_delete)
+
+    def _collation_stream(self, collation_id):
+        key = f"{self._blobs_pfx}/{collation_id}"
+        return self.bucket.Object(key).get()['Body']
+
+    def _manifest(self, collation_id):
+        key = f"{self._collation_pfx}/{collation_id}"
+        return json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
 
     def _get_new_collation_parts(self, number_of_parts):
         def _get_part(item):
             collation_id = item.key.rsplit("/", 1)[1]
-            key = f"{self._collation_pfx}/{collation_id}"
-            manifest = json.loads(self.bucket.Object(key + ".manifest").get()['Body'].read().decode("utf-8"))
-            data = self.bucket.Object(key).get()['Body'].read()
-            return collation_id, manifest, data
+            manifest = self._manifest(collation_id)
+            return collation_id, manifest, self._collation_stream(collation_id).read()
 
         collation_items = list()
         for item in self.bucket.objects.filter(Prefix=self._new_pfx):
-            if not item.key.endswith(".manifest"):
-                collation_items.append(item)
-                if len(collation_items) == number_of_parts:
-                    break
+            collation_items.append(item)
+            if len(collation_items) == number_of_parts:
+                break
         else:
             raise FlashFloodCollationError(f"Available parts less than {number_of_parts}")
         with ThreadPoolExecutor(max_workers=10) as e:
@@ -91,31 +97,38 @@ class FlashFlood:
         start_date, end_date = collation_id.split(ID_PART_DELIMITER)
         return collation_id, datetime_from_timestamp(start_date), datetime_from_timestamp(end_date)
 
+    def _generate_presigned_url(self, collation_id, is_manifest):
+        if is_manifest:
+            key = f"{self._collation_pfx}/{collation_id}"
+        else:
+            key = f"{self._blobs_pfx}/{collation_id}"
+        return s3_client.generate_presigned_url(ClientMethod="get_object",
+                                                Params=dict(Bucket=self.bucket.name, Key=key))
+
+    def _collation_url(self, collation_id):
+        key = f"{self._collation_pfx}/{collation_id}"
+        params = dict(Bucket=self.bucket.name, Key=key)
+        manifest_url = s3_client.generate_presigned_url(ClientMethod="get_object",
+                                                        Params=params)
+
     def events(self, from_date=distant_past, to_date=far_future):
         for collation_blob in self.bucket.objects.filter(Prefix=self._collation_pfx):
-            if not collation_blob.key.endswith(".manifest"):
-                collation_id, start_date, end_date = self._collation_info(collation_blob.key)
-                if start_date >= from_date and end_date <= to_date:
-                    manifest = json.loads(self.bucket.Object(collation_blob.key + ".manifest").get()['Body'].read())
-                    data = collation_blob.get()['Body']
-                    for i in manifest['events']:
-                        part_data = data.read(i['size'])
-                        yield i['timestamp'], i['event_id'], part_data
+            collation_id, start_date, end_date = self._collation_info(collation_blob.key)
+            if start_date >= from_date and end_date <= to_date:
+                manifest = self._manifest(collation_id)
+                collation = self._collation_stream(collation_id)
+                for i in manifest['events']:
+                    part_data = collation.read(i['size'])
+                    yield i['timestamp'], i['event_id'], part_data
 
     def get_presigned_event_urls(self, from_date=distant_past, to_date=far_future):
         urls = list()
         for collation_blob in self.bucket.objects.filter(Prefix=self._collation_pfx):
-            if not collation_blob.key.endswith(".manifest"):
-                collation_id, start_date, end_date = self._collation_info(collation_blob.key)
-                if start_date >= from_date and end_date <= to_date:
-                    collation_key = f"{self._collation_pfx}/{collation_id}"
-                    params = dict(Bucket=self.bucket.name, Key=collation_key + ".manifest")
-                    manifest_url = s3_client.generate_presigned_url(ClientMethod="get_object",
-                                                                 Params=params)
-                    params['Key'] = collation_key
-                    collation_url = s3_client.generate_presigned_url(ClientMethod="get_object",
-                                                                     Params=params)
-                    urls.append(dict(manifest=manifest_url, events=collation_url))
+            collation_id, start_date, end_date = self._collation_info(collation_blob.key)
+            if start_date >= from_date and end_date <= to_date:
+                manifest_url = self._generate_presigned_url(collation_id, True)
+                collation_url = self._generate_presigned_url(collation_id, False)
+                urls.append(dict(manifest=manifest_url, events=collation_url))
         return urls
 
     def _delete_all(self):
