@@ -38,29 +38,30 @@ class FlashFlood:
         assert ID_PART_DELIMITER not in timestamp
         assert ID_PART_DELIMITER not in event_id
         collation_id = timestamp + ID_PART_DELIMITER + timestamp
-        manifest = [dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))]
+        manifest = dict(collation_id=collation_id,
+                        events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
         self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
         manifest_data = json.dumps(manifest).encode("utf-8")
         self.bucket.Object(f"{self._collation_pfx}/{collation_id}.manifest").upload_fileobj(io.BytesIO(manifest_data))
         self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
 
     def collate(self, minimum_number_of_events=10):
-        manifest = list()
+        events = list()
         items_to_delete = list()
         data = b""
         for collation_id, part_manifest, part_data in self._get_new_collation_parts(minimum_number_of_events):
-            size = sum([i['size'] for i in manifest])
-            for i in part_manifest:
+            size = sum([i['size'] for i in events])
+            for i in part_manifest['events']:
                 i['start'] += size
-                manifest.append(i)
+                events.append(i)
             data += part_data
             key = f"{self._collation_pfx}/{collation_id}"
             items_to_delete.append(s3.ObjectSummary(self.bucket.name, key))
             items_to_delete.append(s3.ObjectSummary(self.bucket.name, key + ".manifest"))
             items_to_delete.append(s3.ObjectSummary(self.bucket.name, f"{self._new_pfx}/{collation_id}"))
-        collation_id = manifest[0]['timestamp'] + ID_PART_DELIMITER + manifest[-1]['timestamp']
+        collation_id = events[0]['timestamp'] + ID_PART_DELIMITER + events[-1]['timestamp']
         self.bucket.Object(f"{self._collation_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
-        manifest_data = json.dumps(manifest).encode("utf-8")
+        manifest_data = json.dumps(dict(collation_id=collation_id, events=events)).encode("utf-8")
         self.bucket.Object(f"{self._collation_pfx}/{collation_id}.manifest").upload_fileobj(io.BytesIO(manifest_data))
         _delete_items(items_to_delete)
 
@@ -97,7 +98,7 @@ class FlashFlood:
                 if start_date >= from_date and end_date <= to_date:
                     manifest = json.loads(self.bucket.Object(collation_blob.key + ".manifest").get()['Body'].read())
                     data = collation_blob.get()['Body']
-                    for i in manifest:
+                    for i in manifest['events']:
                         part_data = data.read(i['size'])
                         yield i['timestamp'], i['event_id'], part_data
 
@@ -130,7 +131,7 @@ def events_for_presigned_urls(url_info):
         resp.raise_for_status()
         manifest = resp.json()
         events_body = requests.get(urls['events'], stream=True).raw
-        for item in manifest:
+        for item in manifest['events']:
             yield item['timestamp'], item['event_id'], events_body.read(item['size'])
 
 def _delete_items(items):
