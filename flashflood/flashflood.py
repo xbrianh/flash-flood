@@ -37,7 +37,7 @@ class FlashFlood:
         event_id = event_id or str(uuid4())
         assert ID_PART_DELIMITER not in timestamp
         assert ID_PART_DELIMITER not in event_id
-        collation_id = timestamp + ID_PART_DELIMITER + timestamp
+        collation_id = timestamp + ID_PART_DELIMITER + event_id
         manifest = dict(collation_id=collation_id,
                         events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)))
@@ -60,20 +60,28 @@ class FlashFlood:
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(combined_data)))
         self._delete_collations(collations_to_delete)
 
-    def events(self, from_date=distant_past, to_date=far_future):
+    def events(self, from_date=distant_past):
         for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
-            collation_id, start_date, end_date = self._collation_info(item.key)
-            if start_date >= from_date and end_date <= to_date:
+            collation_id = item.key.rsplit("/", 1)[1]
+            timestamps = collation_id.split("--", 1)
+            collation_start_date = datetime_from_timestamp(timestamps[0])
+            try:
+                collation_end_date = datetime_from_timestamp(timestamps[1])
+            except ValueError:
+                collation_end_date = collation_start_date
+            if collation_start_date >= from_date or from_date <= collation_end_date:
                 collation = self._get_collation(collation_id)
                 for i in collation.manifest['events']:
-                    part_data = collation.body.read(i['size'])
-                    yield Event(i['event_id'], i['timestamp'], part_data)
+                    event_date = datetime_from_timestamp(i['timestamp'])
+                    if event_date >= from_date:
+                        yield Event(i['event_id'], i['timestamp'], collation.body.read(i['size']))
 
-    def event_urls(self, from_date=distant_past, to_date=far_future):
+    def event_urls(self, from_date=distant_past):
         urls = list()
         for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
-            collation_id, start_date, end_date = self._collation_info(item.key)
-            if start_date >= from_date and end_date <= to_date:
+            collation_id = item.key.rsplit("/", 1)[1]
+            collation_start_date = datetime_from_timestamp(collation_id.split("--", 1)[0])
+            if collation_start_date >= from_date:
                 manifest_url = self._generate_presigned_url(collation_id, True)
                 collation_url = self._generate_presigned_url(collation_id, False)
                 urls.append(dict(manifest=manifest_url, events=collation_url))
@@ -85,14 +93,16 @@ class FlashFlood:
         self.bucket.Object(blob_key).upload_fileobj(collation.body)
         self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(collation.manifest).encode("utf-8")))
 
-    def _get_collation(self, collation_id, buffered=False):
+    def _get_manifest(self, collation_id):
         key = f"{self._collation_pfx}/{collation_id}"
-        blob_key = f"{self._blobs_pfx}/{collation_id}"
-        manifest = json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
-        body = self.bucket.Object(blob_key).get()['Body']
+        return json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
+
+    def _get_collation(self, collation_id, buffered=False):
+        key = f"{self._blobs_pfx}/{collation_id}"
+        body = self.bucket.Object(key).get()['Body']
         if buffered:
             body = io.BytesIO(body.read())
-        return Collation(collation_id, manifest, body)
+        return Collation(collation_id, self._get_manifest(collation_id), body)
 
     def _get_new_collation_parts(self, number_of_parts):
         collation_items = list()
@@ -117,11 +127,6 @@ class FlashFlood:
         return s3_client.generate_presigned_url(ClientMethod="get_object",
                                                 Params=dict(Bucket=self.bucket.name, Key=key))
 
-    def _collation_info(self, key):
-        collation_id = key.rsplit("/", 1)[1]
-        start_date, end_date = collation_id.split(ID_PART_DELIMITER)
-        return collation_id, datetime_from_timestamp(start_date), datetime_from_timestamp(end_date)
-
     def _delete_collation(self, collation_id):
         self.bucket.Object(f"{self._collation_pfx}/{collation_id}").delete()
         self.bucket.Object(f"{self._blobs_pfx}/{collation_id}").delete()
@@ -133,12 +138,13 @@ class FlashFlood:
             for f in as_completed(futures):
                 f.result()
 
+    def _list_collations(self):
+        for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
+            yield item.key.rsplit("/", 1)[1]
+
     def _delete_all(self):
-        with ThreadPoolExecutor(max_workers=10) as e:
-            futures = [e.submit(item.delete)
-                       for item in self.bucket.objects.filter(Prefix=self.root_prefix)]
-            for f in as_completed(futures):
-                f.result()
+        collation_ids = [collation_id for collation_id in self._list_collations()]
+        self._delete_collations(collation_ids)
 
 def events_for_presigned_urls(url_info):
     for urls in url_info:
