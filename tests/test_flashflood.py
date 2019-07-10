@@ -30,10 +30,9 @@ class TestFlashFlood(unittest.TestCase):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events(5, collate=False))
-        retrieved_events = {event_id: event_data
-                            for timestamp, event_id, event_data in self.flashflood.events()}
+        retrieved_events = {event.uid: event for event in self.flashflood.events()}
         for event_id in events:
-            self.assertEqual(events[event_id], retrieved_events[event_id])
+            self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
     def test_collation(self):
         self.generate_events(1, collate=False)
@@ -44,19 +43,17 @@ class TestFlashFlood(unittest.TestCase):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events())
-        resp = self.flashflood.event_urls()
-        retrieved_events = {event_id: event_data
-                            for _, event_id, event_data in flashflood.events_for_presigned_urls(resp)}
+        event_urls = self.flashflood.event_urls()
+        retrieved_events = {event.uid: event
+                            for event in flashflood.events_for_presigned_urls(event_urls)}
         for event_id in events:
-            self.assertEqual(events[event_id], retrieved_events[event_id])
+            self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
     def generate_events(self, number_of_events=7, collate=True):
         events = dict()
         for _ in range(number_of_events):
-            event_data = os.urandom(10)
             event_id = str(uuid4()) + ".asdj__argh"
-            events[event_id] = event_data
-            self.flashflood.put(event_data, event_id)
+            events[event_id] = self.flashflood.put(os.urandom(10), event_id)
         if collate:
             self.flashflood.collate(number_of_events=number_of_events)
         return events
