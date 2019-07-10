@@ -11,7 +11,7 @@ from tempfile import gettempdir
 pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noqa
 sys.path.insert(0, pkg_root)  # noqa
 
-import flashflood
+from flashflood import flashflood
 from tests import infra
 
 
@@ -27,7 +27,8 @@ class TestFlashFlood(unittest.TestCase):
         cls.flashflood._delete_all()
 
     def test_events(self):
-        events = self.generate_events()
+        events = dict()
+        events.update(self.generate_events())
         events.update(self.generate_events(5, collate=False))
         retrieved_events = {event_id: event_data
                             for timestamp, event_id, event_data in self.flashflood.events()}
@@ -40,11 +41,14 @@ class TestFlashFlood(unittest.TestCase):
             self.flashflood.collate(minimum_number_of_events=2)
 
     def test_urls(self):
-        self.generate_events()
-        self.generate_events()
+        events = dict()
+        events.update(self.generate_events())
+        events.update(self.generate_events())
         resp = self.flashflood.event_urls()
-        for timestamp, event_id, event_data in flashflood.events_for_presigned_urls(resp):
-            print(event_id)
+        retrieved_events = {event_id: event_data
+                            for _, event_id, event_data in flashflood.events_for_presigned_urls(resp)}
+        for event_id in events:
+            self.assertEqual(events[event_id], retrieved_events[event_id])
 
     def generate_events(self, number_of_events=7, collate=True):
         events = dict()
