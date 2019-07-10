@@ -38,7 +38,7 @@ class TestFlashFlood(unittest.TestCase):
     def test_collation(self):
         self.generate_events(1, collate=False)
         with self.assertRaises(flashflood.FlashFloodCollationError):
-            self.flashflood.collate(minimum_number_of_events=2)
+            self.flashflood.collate(number_of_events=2)
 
     def test_urls(self):
         events = dict()
@@ -58,7 +58,7 @@ class TestFlashFlood(unittest.TestCase):
             events[event_id] = event_data
             self.flashflood.put(event_data, event_id)
         if collate:
-            self.flashflood.collate(minimum_number_of_events=number_of_events)
+            self.flashflood.collate(number_of_events=number_of_events)
         return events
 
 if __name__ == '__main__':

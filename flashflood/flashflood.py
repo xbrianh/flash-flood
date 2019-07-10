@@ -7,23 +7,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 
+from flashflood.util import timestamp_now, datetime_from_timestamp, distant_past, far_future
+
+
 s3 = boto3.resource("s3")
 s3_client = boto3.client("s3")
-  
-def timestamp_now():
-    timestamp = datetime.datetime.utcnow()
-    return timestamp.strftime("%Y-%m-%dT%H%M%S.%fZ")
 
-def datetime_from_timestamp(ts):
-    return datetime.datetime.strptime(ts, "%Y-%m-%dT%H%M%S.%fZ")
 
-distant_past = datetime_from_timestamp("0001-01-01T000000.000000Z")
-far_future = datetime_from_timestamp("5000-01-01T000000.000000Z")
 ID_PART_DELIMITER = "--"
 RINDEX_DELIMITER = ID_PART_DELIMITER + "-"
 
-class FlashFloodCollationError(Exception):
-    pass
 
 class FlashFlood:
     def __init__(self, bucket, root_prefix):
@@ -45,11 +38,11 @@ class FlashFlood:
         self._upload_manifest(manifest)
         self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
 
-    def collate(self, minimum_number_of_events=10):
+    def collate(self, number_of_events=10):
         events = list()
         collations_to_delete = list()
         data = b""
-        for collation_id, part_manifest, part_data in self._get_new_collation_parts(minimum_number_of_events):
+        for collation_id, part_manifest, part_data in self._get_new_collation_parts(number_of_events):
             size = sum([i['size'] for i in events])
             for i in part_manifest['events']:
                 i['start'] += size
@@ -92,7 +85,7 @@ class FlashFlood:
 
     def _upload_collation(self, collation_id, data):
         key = f"{self._blobs_pfx}/{collation_id}"
-        self.bucket.Object(f"{self._blobs_pfx}/{collation_id}").upload_fileobj(io.BytesIO(data))
+        self.bucket.Object(key).upload_fileobj(io.BytesIO(data))
 
     def _upload_manifest(self, manifest):
         key = f"{self._collation_pfx}/{manifest['collation_id']}"
@@ -156,3 +149,6 @@ def events_for_presigned_urls(url_info):
         events_body = requests.get(urls['events'], stream=True).raw
         for item in manifest['events']:
             yield item['timestamp'], item['event_id'], events_body.read(item['size'])
+
+class FlashFloodCollationError(Exception):
+    pass
