@@ -73,7 +73,7 @@ class TestFlashFlood(unittest.TestCase):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events())
-        event_urls = self.flashflood.event_urls()
+        event_urls = self.flashflood.event_urls(number_of_pages=2)
         retrieved_events = {event.uid: event
                             for event in flashflood.events_from_urls(event_urls)}
         for event_id in events:
