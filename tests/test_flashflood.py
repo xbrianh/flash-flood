@@ -11,7 +11,7 @@ pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noq
 sys.path.insert(0, pkg_root)  # noqa
 
 from flashflood import flashflood
-from flashflood.util import datetime_from_timestamp
+from flashflood.util import datetime_from_timestamp, distant_past
 
 
 class TestFlashFlood(unittest.TestCase):
@@ -54,11 +54,15 @@ class TestFlashFlood(unittest.TestCase):
             self.assertEqual(len(timestamps) - 1, len(retrieved_events))
 
         with self.subTest("events via urls should be returned from date"):
-            event_urls = self.flashflood.event_urls(from_date)
-            retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date)]
-            for event in retrieved_events:
-                self.assertGreaterEqual(datetime_from_timestamp(event.timestamp), from_date)
-            self.assertEqual(len(timestamps) - 1, len(retrieved_events))
+            from_date = distant_past
+            while True:
+                event_urls = self.flashflood.event_urls(from_date, 1)
+                if not event_urls:
+                    break
+                retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date)]
+                for event in retrieved_events:
+                    self.assertGreaterEqual(datetime_from_timestamp(event.timestamp), from_date)
+                from_date = datetime_from_timestamp(event_urls[-1]['manifest']['to_date'])
 
     def test_collation(self):
         self.generate_events(1, collate=False)

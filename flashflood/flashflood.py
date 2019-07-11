@@ -39,6 +39,8 @@ class FlashFlood:
         assert ID_PART_DELIMITER not in event_id
         collation_id = timestamp + ID_PART_DELIMITER + "new"
         manifest = dict(collation_id=collation_id,
+                        from_date=timestamp,
+                        to_date=timestamp,
                         events=[dict(event_id=event_id, timestamp=timestamp, size=len(data))])
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)))
         self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
@@ -55,25 +57,30 @@ class FlashFlood:
             combined_data += collation.body.read()
             collations_to_delete.append(collation.uid)
         collation_id = events[0]['timestamp'] + ID_PART_DELIMITER + events[-1]['timestamp']
-        manifest = dict(collation_id=collation_id, events=events)
+        manifest = dict(collation_id=collation_id,
+                        from_date=events[0]['timestamp'],
+                        to_date=events[-1]['timestamp'],
+                        events=events)
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(combined_data)))
         self._delete_collations(collations_to_delete)
 
     def events(self, from_date=None):
-        from_date = from_date or distant_past
+        event_from_date = from_date or distant_past
         for collation_id in self._collations_ids(from_date):
             collation = self._get_collation(collation_id)
             for i in collation.manifest['events']:
                 event_date = datetime_from_timestamp(i['timestamp'])
-                if event_date >= from_date:
+                if event_date >= event_from_date:
                     yield Event(i['event_id'], i['timestamp'], collation.body.read(i['size']))
 
-    def event_urls(self, from_date=None):
+    def event_urls(self, from_date=None, number_of_pages=1):
         urls = list()
         for collation_id in self._collations_ids(from_date):
-            manifest_url = self._generate_presigned_url(collation_id, True)
+            manifest = self._get_manifest(collation_id)
             collation_url = self._generate_presigned_url(collation_id, False)
-            urls.append(dict(manifest=manifest_url, events=collation_url))
+            urls.append(dict(manifest=manifest, events=collation_url))
+            if len(urls) == number_of_pages:
+                break
         return urls
 
     def _upload_collation(self, collation):
@@ -128,7 +135,6 @@ class FlashFlood:
                 f.result()
 
     def _collations_ids(self, from_date=None):
-        from_date = from_date or distant_past
         for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
             collation_id = item.key.rsplit("/", 1)[1]
             if from_date:
@@ -137,7 +143,7 @@ class FlashFlood:
                     collation_end_date = datetime_from_timestamp(timestamps[1])
                 except ValueError:
                     collation_end_date = datetime_from_timestamp(timestamps[0])
-                if collation_end_date < from_date:
+                if collation_end_date <= from_date:
                     continue
             yield collation_id
 
@@ -147,13 +153,12 @@ class FlashFlood:
 
 def events_from_urls(url_info, from_date=distant_past):
     for urls in url_info:
-        resp = requests.get(urls['manifest'])
+        manifest = urls['manifest']
+        resp = requests.get(urls['events'], stream=True)
         resp.raise_for_status()
-        manifest = resp.json()
-        events_body = requests.get(urls['events'], stream=True).raw
         for item in manifest['events']:
-            if datetime_from_timestamp(item['timestamp']) >= from_date:
-                yield Event(item['event_id'], item['timestamp'], events_body.read(item['size']))
+            if datetime_from_timestamp(item['timestamp']) > from_date:
+                yield Event(item['event_id'], item['timestamp'], resp.raw.read(item['size']))
 
 class FlashFloodCollationError(Exception):
     pass
