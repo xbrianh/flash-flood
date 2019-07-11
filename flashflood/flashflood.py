@@ -1,5 +1,5 @@
 import io
-import datetime
+from datetime import datetime
 import json
 import requests
 from uuid import uuid4
@@ -8,7 +8,7 @@ from collections import namedtuple
 
 import boto3
 
-from flashflood.util import timestamp_now, datetime_from_timestamp, distant_past, far_future
+from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, distant_past, far_future
 
 
 s3 = boto3.resource("s3")
@@ -20,7 +20,7 @@ RINDEX_DELIMITER = ID_PART_DELIMITER + "-"
 
 
 Collation = namedtuple("Collation", "uid manifest body")
-Event = namedtuple("Event", "uid timestamp data")
+Event = namedtuple("Event", "uid date data")
 
 
 class FlashFlood:
@@ -32,10 +32,10 @@ class FlashFlood:
         self._new_pfx = f"{root_prefix}/new"
         self._index_pfx = f"{root_prefix}/index"
 
-    def put(self, data, event_id: str=None, timestamp: str=None):
-        timestamp = timestamp or timestamp_now()
+    def put(self, data, event_id: str=None, date: datetime=None):
+        date = date or datetime.utcnow()
+        timestamp = datetime_to_timestamp(date)
         event_id = event_id or str(uuid4())
-        assert ID_PART_DELIMITER not in timestamp
         assert ID_PART_DELIMITER not in event_id
         collation_id = timestamp + ID_PART_DELIMITER + "new"
         manifest = dict(collation_id=collation_id,
@@ -44,7 +44,7 @@ class FlashFlood:
                         events=[dict(event_id=event_id, timestamp=timestamp, size=len(data))])
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)))
         self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
-        return Event(event_id, timestamp, data)
+        return Event(event_id, date, data)
 
     def collate(self, number_of_events=10):
         events = list()
@@ -66,16 +66,17 @@ class FlashFlood:
 
     def events(self, from_date=None):
         event_from_date = from_date or distant_past
-        for collation_id in self._collations_ids(from_date):
+        for collation_id in self._collation_ids(from_date):
             collation = self._get_collation(collation_id)
             for i in collation.manifest['events']:
                 event_date = datetime_from_timestamp(i['timestamp'])
-                if event_date >= event_from_date:
-                    yield Event(i['event_id'], i['timestamp'], collation.body.read(i['size']))
+                if event_date > event_from_date:
+                    date = datetime_from_timestamp(i['timestamp'])
+                    yield Event(i['event_id'], date, collation.body.read(i['size']))
 
     def event_urls(self, from_date=None, number_of_pages=1):
         urls = list()
-        for collation_id in self._collations_ids(from_date):
+        for collation_id in self._collation_ids(from_date):
             manifest = self._get_manifest(collation_id)
             collation_url = self._generate_presigned_url(collation_id, False)
             urls.append(dict(manifest=manifest, events=collation_url))
@@ -134,7 +135,7 @@ class FlashFlood:
             for f in as_completed(futures):
                 f.result()
 
-    def _collations_ids(self, from_date=None):
+    def _collation_ids(self, from_date=None):
         for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
             collation_id = item.key.rsplit("/", 1)[1]
             if from_date:
@@ -148,7 +149,7 @@ class FlashFlood:
             yield collation_id
 
     def _delete_all(self):
-        collation_ids = [collation_id for collation_id in self._collations_ids()]
+        collation_ids = [collation_id for collation_id in self._collation_ids()]
         self._delete_collations(collation_ids)
 
 def events_from_urls(url_info, from_date=distant_past):
@@ -157,8 +158,9 @@ def events_from_urls(url_info, from_date=distant_past):
         resp = requests.get(urls['events'], stream=True)
         resp.raise_for_status()
         for item in manifest['events']:
-            if datetime_from_timestamp(item['timestamp']) > from_date:
-                yield Event(item['event_id'], item['timestamp'], resp.raw.read(item['size']))
+            event_date = datetime_from_timestamp(item['timestamp'])
+            if event_date > from_date:
+                yield Event(item['event_id'], event_date, resp.raw.read(item['size']))
 
 class FlashFloodCollationError(Exception):
     pass
