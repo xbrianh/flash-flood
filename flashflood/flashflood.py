@@ -51,7 +51,6 @@ class FlashFlood:
         collations_to_delete = list()
         combined_data = b""
         for collation in self._get_new_collations(number_of_events):
-            size = sum([i['size'] for i in events])
             for i in collation.manifest['events']:
                 events.append(i)
             combined_data += collation.body.read()

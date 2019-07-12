@@ -49,10 +49,8 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("events should be returned in order with date > from_date"):
             from_date = sorted(dates)[0]
             retrieved_events = [event for event in self.flashflood.events(from_date=from_date)]
-            last_date = from_date
             for event in retrieved_events:
                 self.assertGreater(event.date, from_date)
-                last_date = event.date
             self.assertEqual(len(dates) - 1, len(retrieved_events))
 
         with self.subTest("events via urls should be returned in order with date > from_date"):
@@ -97,13 +95,13 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_get_new_collations(self):
         events = self.generate_events(3, collate=False)
-        new_collations = [c for c in self.flashflood._get_new_collations(len(events)-1)]
-        self.assertEqual(len(events)-1, len(new_collations))
+        new_collations = [c for c in self.flashflood._get_new_collations(len(events) - 1)]
+        self.assertEqual(len(events) - 1, len(new_collations))
 
     def generate_events(self, number_of_events=7, collate=True):
         def _put():
             event_id = str(uuid4()) + ".asdj__argh"
-            return self.flashflood.put(os.urandom(3), event_id, self._random_timestamp()) 
+            return self.flashflood.put(os.urandom(3), event_id, self._random_timestamp())
 
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = [e.submit(_put) for _ in range(number_of_events)]
@@ -113,7 +111,7 @@ class TestFlashFlood(unittest.TestCase):
         return events
 
     def _random_timestamp(self):
-        year = "%04i" % randint(1000,2019)
+        year = "%04i" % randint(1000, 2019)
         month = "%02i" % randint(1, 12)
         day = "%02i" % randint(1, 28)
         hours = "%02i" % randint(0, 23)
