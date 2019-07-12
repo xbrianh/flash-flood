@@ -1,0 +1,4 @@
+flake8
+coverage
+httpie
+-r requirements.txt

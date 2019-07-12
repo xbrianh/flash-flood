@@ -10,7 +10,7 @@ from random import randint
 pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noqa
 sys.path.insert(0, pkg_root)  # noqa
 
-from flashflood import flashflood
+import flashflood
 from flashflood.util import datetime_from_timestamp, distant_past
 
 
