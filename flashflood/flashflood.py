@@ -41,9 +41,9 @@ class FlashFlood:
         manifest = dict(collation_id=collation_id,
                         from_date=timestamp,
                         to_date=timestamp,
+                        size=len(data),
                         events=[dict(event_id=event_id, timestamp=timestamp, size=len(data))])
-        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)))
-        self.bucket.Object(f"{self._new_pfx}/{collation_id}").upload_fileobj(io.BytesIO(b""))
+        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)), is_new=True)
         return Event(event_id, date, data)
 
     def collate(self, number_of_events=10):
@@ -60,6 +60,7 @@ class FlashFlood:
         manifest = dict(collation_id=collation_id,
                         from_date=events[0]['timestamp'],
                         to_date=events[-1]['timestamp'],
+                        size=len(combined_data),
                         events=events)
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(combined_data)))
         self._delete_collations(collations_to_delete)
@@ -84,11 +85,13 @@ class FlashFlood:
                 break
         return urls
 
-    def _upload_collation(self, collation):
+    def _upload_collation(self, collation, is_new=False):
         key = f"{self._collation_pfx}/{collation.uid}"
         blob_key = f"{self._blobs_pfx}/{collation.uid}"
         self.bucket.Object(blob_key).upload_fileobj(collation.body)
         self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(collation.manifest).encode("utf-8")))
+        if is_new:
+            self.bucket.Object(f"{self._new_pfx}/{collation.uid}").upload_fileobj(io.BytesIO(b""))
 
     def _get_manifest(self, collation_id):
         key = f"{self._collation_pfx}/{collation_id}"
@@ -155,7 +158,16 @@ class FlashFlood:
 def events_from_urls(url_info, from_date=distant_past):
     for urls in url_info:
         manifest = urls['manifest']
-        resp = requests.get(urls['events'], stream=True)
+        start_byte = 0
+        for event_info in manifest['events']:
+            if datetime_from_timestamp(event_info['timestamp']) > from_date:
+                break
+            else:
+                start_byte += event_info['size']
+        else:
+            continue
+        byte_range = f"bytes={start_byte}-{manifest['size']-1}"
+        resp = requests.get(urls['events'], headers=dict(Range=byte_range), stream=True)
         resp.raise_for_status()
         for item in manifest['events']:
             event_date = datetime_from_timestamp(item['timestamp'])

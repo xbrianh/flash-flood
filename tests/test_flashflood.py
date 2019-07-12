@@ -66,6 +66,20 @@ class TestFlashFlood(unittest.TestCase):
                     self.assertGreater(event.date, from_date)
                     from_date = event.date
 
+    def test_url_range(self):
+        """
+        Partial date requests should download only a range of the collation
+        """
+        events = self.generate_events(10)
+        events = sorted([e for e in events.values()], key=lambda e: e.date)
+        from_date = events[3].date
+        event_urls = self.flashflood.event_urls(from_date)
+        retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date)]
+        for event in events[:4]:
+            self.assertNotIn(event, retrieved_events)
+        for event in events[4:]:
+            self.assertIn(event, retrieved_events)
+
     def test_collation(self):
         self.generate_events(1, collate=False)
         with self.assertRaises(flashflood.FlashFloodCollationError):
