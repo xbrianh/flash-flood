@@ -30,7 +30,7 @@ class TestFlashFlood(unittest.TestCase):
                 f.result()
 
     def tearDown(self):
-        self.flashflood._delete_all()
+        self.flashflood._delete_all_collations()
 
     def test_events(self):
         events = dict()

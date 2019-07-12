@@ -63,6 +63,7 @@ class FlashFlood:
                         events=events)
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(combined_data)))
         self._delete_collations(collations_to_delete)
+        return manifest
 
     def events(self, from_date=None):
         event_from_date = from_date or distant_past
@@ -150,9 +151,13 @@ class FlashFlood:
                     continue
             yield collation_id
 
-    def _delete_all(self):
+    def _delete_all_collations(self):
         collation_ids = [collation_id for collation_id in self._collation_ids()]
         self._delete_collations(collation_ids)
+
+    def _destroy(self):
+        for item in self.bucket.objects.filter(Prefix=self.root_prefix):
+            item.delete()
 
 def events_from_urls(url_info, from_date=distant_past):
     for urls in url_info:
