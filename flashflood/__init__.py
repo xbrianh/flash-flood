@@ -15,8 +15,8 @@ s3 = boto3.resource("s3")
 s3_client = boto3.client("s3")
 
 
-Collation = namedtuple("_Collation", "uid manifest body")
-Event = namedtuple("Event", "uid date data")
+Event = namedtuple("Event", "event_id date data")
+_Collation = namedtuple("_Collation", "id_ manifest body")
 
 class _CollationID(str):
     DELIMITER = "--"
@@ -66,7 +66,7 @@ class FlashFlood:
                         to_date=timestamp,
                         size=len(data),
                         events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
-        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)), is_new=True)
+        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(data)), is_new=True)
         return Event(event_id, date, data)
 
     def collate(self, number_of_events=10):
@@ -77,7 +77,7 @@ class FlashFlood:
             for i in collation.manifest['events']:
                 events.append({**i, **dict(start=len(combined_data))})
             combined_data += collation.body.read()
-            collations_to_delete.append(collation.uid)
+            collations_to_delete.append(collation.id_)
         blob_id = str(uuid4())
         collation_id = _CollationID.make(events[0]['timestamp'], events[-1]['timestamp'], blob_id)
         manifest = dict(collation_id=collation_id,
@@ -85,7 +85,7 @@ class FlashFlood:
                         to_date=events[-1]['timestamp'],
                         size=len(combined_data),
                         events=events)
-        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(combined_data)))
+        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(combined_data)))
         self._delete_collations(collations_to_delete)
         return manifest
 
@@ -138,7 +138,7 @@ class FlashFlood:
                         to_date=events[-1]['timestamp'],
                         size=len(new_blob_data),
                         events=events)
-        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(new_blob_data)))
+        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(new_blob_data)))
 
     def event_urls(self, from_date=None, number_of_pages=1):
         urls = list()
@@ -151,17 +151,17 @@ class FlashFlood:
         return urls
 
     def _upload_collation(self, collation, is_new=False):
-        key = f"{self._collation_pfx}/{collation.uid}"
-        blob_key = f"{self._blobs_pfx}/{collation.uid.blob_id}"
+        key = f"{self._collation_pfx}/{collation.id_}"
+        blob_key = f"{self._blobs_pfx}/{collation.id_.blob_id}"
         self.bucket.Object(blob_key).upload_fileobj(collation.body,
-                                                    ExtraArgs=dict(Metadata=dict(collation_id=collation.uid)))
+                                                    ExtraArgs=dict(Metadata=dict(collation_id=collation.id_)))
         self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(collation.manifest).encode("utf-8")))
         if is_new:
-            self.bucket.Object(f"{self._new_pfx}/{collation.uid}").upload_fileobj(io.BytesIO(b""))
+            self.bucket.Object(f"{self._new_pfx}/{collation.id_}").upload_fileobj(io.BytesIO(b""))
         for item in collation.manifest['events']:
             key = f"{self._index_pfx}/{item['event_id']}"
             self.bucket.Object(key).upload_fileobj(io.BytesIO(b""),
-                                                   ExtraArgs=dict(Metadata=dict(collation_id=collation.uid)))
+                                                   ExtraArgs=dict(Metadata=dict(collation_id=collation.id_)))
 
     def _get_manifest(self, collation_id):
         key = f"{self._collation_pfx}/{collation_id}"
@@ -172,7 +172,7 @@ class FlashFlood:
         body = self.bucket.Object(key).get()['Body']
         if buffered:
             body = io.BytesIO(body.read())
-        return Collation(collation_id, self._get_manifest(collation_id), body)
+        return _Collation(collation_id, self._get_manifest(collation_id), body)
 
     def _get_new_collations(self, number_of_parts):
         collation_ids = list()
@@ -186,7 +186,7 @@ class FlashFlood:
             futures = [e.submit(self._get_collation, collation_id, buffered=True)
                        for collation_id in collation_ids]
             collations = [f.result() for f in as_completed(futures)]
-        collations.sort(key=lambda collation: collation.uid)
+        collations.sort(key=lambda collation: collation.id_)
         return collations
 
     def _generate_presigned_url(self, collation_id):

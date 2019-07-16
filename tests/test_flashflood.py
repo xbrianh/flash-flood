@@ -58,7 +58,7 @@ class TestFlashFlood(unittest.TestCase):
                 self.flashflood.update_event(new_data, event_id)
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, new_data)
-                events[event.uid] = event
+                events[event.event_id] = event
         self.flashflood.collate(10)
         with self.subTest("Update an event after collation"):
             for _ in range(3):
@@ -67,16 +67,16 @@ class TestFlashFlood(unittest.TestCase):
                 self.flashflood.update_event(new_data, event_id)
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, new_data)
-                events[event.uid] = event
+                events[event.event_id] = event
         with self.subTest("Get events after update"):
             for event in self.flashflood.events():
-                self.assertEqual(event.data, events[event.uid].data)
+                self.assertEqual(event.data, events[event.event_id].data)
 
     def test_events(self):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events(5, collate=False))
-        retrieved_events = {event.uid: event for event in self.flashflood.events()}
+        retrieved_events = {event.event_id: event for event in self.flashflood.events()}
         for event_id in events:
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
@@ -128,7 +128,7 @@ class TestFlashFlood(unittest.TestCase):
         events.update(self.generate_events())
         events.update(self.generate_events())
         event_urls = self.flashflood.event_urls(number_of_pages=2)
-        retrieved_events = {event.uid: event
+        retrieved_events = {event.event_id: event
                             for event in flashflood.events_from_urls(event_urls)}
         for event_id in events:
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
@@ -145,7 +145,7 @@ class TestFlashFlood(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = [e.submit(_put) for _ in range(number_of_events)]
-            events = {f.result().uid: f.result() for f in futures}
+            events = {f.result().event_id: f.result() for f in futures}
         if collate:
             self.flashflood.collate(number_of_events=number_of_events)
         return events
