@@ -34,14 +34,43 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_get_event(self):
         events = self.generate_events(10, collate=False)
-        for _ in range(3):
-            event_id = [event_id for event_id in events][randint(0, 9)]
-            event = self.flashflood.get_event(event_id)
-            self.assertEqual(event.data, events[event_id].data)
+        with self.subTest("Get an event before collation"):
+            for _ in range(3):
+                event_id = [event_id for event_id in events][randint(0, 9)]
+                event = self.flashflood.get_event(event_id)
+                self.assertEqual(event.data, events[event_id].data)
         self.flashflood.collate(10)
-        for _ in range(3):
-            event = self.flashflood.get_event(event_id)
-            self.assertEqual(event.data, events[event_id].data)
+        with self.subTest("Get an event after collation"):
+            for _ in range(3):
+                event_id = [event_id for event_id in events][randint(0, 9)]
+                event = self.flashflood.get_event(event_id)
+                self.assertEqual(event.data, events[event_id].data)
+        with self.subTest("Get non-existent event"):
+            with self.assertRaises(flashflood.FlashFloodEventNotFound):
+                self.flashflood.get_event("no_such_event")
+
+    def test_update_event(self):
+        events = self.generate_events(10, collate=False)
+        with self.subTest("Update an event before collation"):
+            for _ in range(3):
+                event_id = [event_id for event_id in events][randint(0, 9)]
+                new_data = os.urandom(5)
+                self.flashflood.update_event(new_data, event_id)
+                event = self.flashflood.get_event(event_id)
+                self.assertEqual(event.data, new_data)
+                events[event.uid] = event
+        self.flashflood.collate(10)
+        with self.subTest("Update an event after collation"):
+            for _ in range(3):
+                event_id = [event_id for event_id in events][randint(0, 9)]
+                new_data = os.urandom(5)
+                self.flashflood.update_event(new_data, event_id)
+                event = self.flashflood.get_event(event_id)
+                self.assertEqual(event.data, new_data)
+                events[event.uid] = event
+        with self.subTest("Get events after update"):
+            for event in self.flashflood.events():
+                self.assertEqual(event.data, events[event.uid].data)
 
     def test_events(self):
         events = dict()

@@ -15,7 +15,7 @@ s3 = boto3.resource("s3")
 s3_client = boto3.client("s3")
 
 
-Collation = namedtuple("Collation", "uid manifest body")
+Collation = namedtuple("_Collation", "uid manifest body")
 Event = namedtuple("Event", "uid date data")
 
 class _CollationID(str):
@@ -99,20 +99,46 @@ class FlashFlood:
                     date = datetime_from_timestamp(i['timestamp'])
                     yield Event(i['event_id'], date, collation.body.read(i['size']))
 
-    def get_event(self, event_id):
+    def _lookup_event(self, event_id):
         try:
             key = next(iter(self.bucket.objects.filter(Prefix=f"{self._index_pfx}/{event_id}"))).key
         except StopIteration:
-            return None
+            raise FlashFloodEventNotFound()
+        collation_id = _CollationID(self.bucket.Object(key).metadata['collation_id'])
+        manifest = self._get_manifest(collation_id)
+        for item in manifest['events']:
+            if event_id == item['event_id']:
+                break
         else:
-            collation_id = _CollationID(self.bucket.Object(key).metadata['collation_id'])
-            manifest = self._get_manifest(collation_id)
-            for item in manifest['events']:
-                if event_id == item['event_id']:
-                    blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
-                    byte_range = f"bytes={item['start']}-{item['start'] + item['size'] - 1}"
-                    data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
-                    return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
+            raise FlashFloodException(f"Event {event_id} not found in {collation_id}")
+        return collation_id, manifest, item
+
+    def get_event(self, event_id):
+        collation_id, manifest, item = self._lookup_event(event_id)
+        blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+        byte_range = f"bytes={item['start']}-{item['start'] + item['size'] - 1}"
+        data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
+        return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
+
+    def update_event(self, new_event_data, event_id):
+        collation_id, manifest, item = self._lookup_event(event_id)
+        blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+        blob_data = self.bucket.Object(blob_key).get()['Body'].read()
+        new_blob_data = (blob_data[:item['start']]
+                         + new_event_data
+                         + blob_data[item['start'] + item['size']:])
+        item['size'] = len(new_event_data)
+        data_size = 0
+        for item in manifest['events']:
+            item['start'] = data_size
+            data_size += item['size']
+        events = manifest['events']
+        manifest = dict(collation_id=collation_id,
+                        from_date=events[0]['timestamp'],
+                        to_date=events[-1]['timestamp'],
+                        size=len(new_blob_data),
+                        events=events)
+        self._upload_collation(Collation(collation_id, manifest, io.BytesIO(new_blob_data)))
 
     def event_urls(self, from_date=None, number_of_pages=1):
         urls = list()
@@ -214,5 +240,11 @@ def events_from_urls(url_info, from_date=distant_past):
             if event_date > from_date:
                 yield Event(item['event_id'], event_date, resp.raw.read(item['size']))
 
-class FlashFloodCollationError(Exception):
+class FlashFloodException(Exception):
+    pass
+
+class FlashFloodCollationError(FlashFloodException):
+    pass
+
+class FlashFloodEventNotFound(FlashFloodException):
     pass
