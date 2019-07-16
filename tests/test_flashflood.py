@@ -87,22 +87,32 @@ class TestFlashFlood(unittest.TestCase):
         dates = [e.date for e in events.values()]
 
         with self.subTest("events should be returned in order with date > from_date"):
-            from_date = sorted(dates)[0]
-            retrieved_events = [event for event in self.flashflood.events(from_date=from_date)]
+            ordered_dates = sorted(dates)
+            from_date = ordered_dates[0]
+            to_date = ordered_dates[-2]
+            retrieved_events = [event for event in self.flashflood.events(from_date, to_date)]
             for event in retrieved_events:
                 self.assertGreater(event.date, from_date)
-            self.assertEqual(len(dates) - 1, len(retrieved_events))
+                self.assertLessEqual(event.date, to_date)
+            self.assertEqual(len(dates) - 2, len(retrieved_events))
 
         with self.subTest("events via urls should be returned in order with date > from_date"):
-            from_date = distant_past
+            ordered_dates = sorted(dates)
+            from_date = ordered_dates[0]
+            to_date = ordered_dates[-2]
+            retrieved_events = list()
             while True:
-                event_urls = self.flashflood.event_urls(from_date, 1)
+                event_urls = self.flashflood.event_urls(from_date, to_date, maximum_number_of_results=1)
                 if not event_urls:
                     break
-                retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date)]
-                for event in retrieved_events:
+                new_retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date, to_date)]
+                for event in new_retrieved_events:
                     self.assertGreater(event.date, from_date)
-                    from_date = event.date
+                retrieved_events.extend(new_retrieved_events)
+                from_date = datetime_from_timestamp(event_urls[-1]['manifest']['to_date'])
+            self.assertEqual(len(dates) - 2, len(retrieved_events))
+
+    # TODO: and DateRange tests
 
     def test_url_range(self):
         """
@@ -127,7 +137,7 @@ class TestFlashFlood(unittest.TestCase):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events())
-        event_urls = self.flashflood.event_urls(number_of_pages=2)
+        event_urls = self.flashflood.event_urls(maximum_number_of_results=2)
         retrieved_events = {event.event_id: event
                             for event in flashflood.events_from_urls(event_urls)}
         for event_id in events:
