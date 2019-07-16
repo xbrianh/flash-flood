@@ -65,7 +65,7 @@ class FlashFlood:
                         from_date=timestamp,
                         to_date=timestamp,
                         size=len(data),
-                        events=[dict(event_id=event_id, timestamp=timestamp, size=len(data))])
+                        events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
         self._upload_collation(Collation(collation_id, manifest, io.BytesIO(data)), is_new=True)
         return Event(event_id, date, data)
 
@@ -75,7 +75,7 @@ class FlashFlood:
         combined_data = b""
         for collation in self._get_new_collations(number_of_events):
             for i in collation.manifest['events']:
-                events.append(i)
+                events.append({**i, **dict(start=len(combined_data))})
             combined_data += collation.body.read()
             collations_to_delete.append(collation.uid)
         blob_id = str(uuid4())
@@ -99,6 +99,21 @@ class FlashFlood:
                     date = datetime_from_timestamp(i['timestamp'])
                     yield Event(i['event_id'], date, collation.body.read(i['size']))
 
+    def get_event(self, event_id):
+        try:
+            key = next(iter(self.bucket.objects.filter(Prefix=f"{self._index_pfx}/{event_id}"))).key
+        except StopIteration:
+            return None
+        else:
+            collation_id = _CollationID(self.bucket.Object(key).metadata['collation_id'])
+            manifest = self._get_manifest(collation_id)
+            for item in manifest['events']:
+                if event_id == item['event_id']:
+                    blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+                    byte_range = f"bytes={item['start']}-{item['start'] + item['size'] - 1}"
+                    data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
+                    return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
+
     def event_urls(self, from_date=None, number_of_pages=1):
         urls = list()
         for collation_id in self._collation_ids(from_date):
@@ -112,10 +127,15 @@ class FlashFlood:
     def _upload_collation(self, collation, is_new=False):
         key = f"{self._collation_pfx}/{collation.uid}"
         blob_key = f"{self._blobs_pfx}/{collation.uid.blob_id}"
-        self.bucket.Object(blob_key).upload_fileobj(collation.body)
+        self.bucket.Object(blob_key).upload_fileobj(collation.body,
+                                                    ExtraArgs=dict(Metadata=dict(collation_id=collation.uid)))
         self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(collation.manifest).encode("utf-8")))
         if is_new:
             self.bucket.Object(f"{self._new_pfx}/{collation.uid}").upload_fileobj(io.BytesIO(b""))
+        for item in collation.manifest['events']:
+            key = f"{self._index_pfx}/{item['event_id']}"
+            self.bucket.Object(key).upload_fileobj(io.BytesIO(b""),
+                                                   ExtraArgs=dict(Metadata=dict(collation_id=collation.uid)))
 
     def _get_manifest(self, collation_id):
         key = f"{self._collation_pfx}/{collation_id}"

@@ -32,6 +32,17 @@ class TestFlashFlood(unittest.TestCase):
     def tearDown(self):
         self.flashflood._delete_all_collations()
 
+    def test_get_event(self):
+        events = self.generate_events(10, collate=False)
+        for _ in range(3):
+            event_id = [event_id for event_id in events][randint(0, 9)]
+            event = self.flashflood.get_event(event_id)
+            self.assertEqual(event.data, events[event_id].data)
+        self.flashflood.collate(10)
+        for _ in range(3):
+            event = self.flashflood.get_event(event_id)
+            self.assertEqual(event.data, events[event_id].data)
+
     def test_events(self):
         events = dict()
         events.update(self.generate_events())
