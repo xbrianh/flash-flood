@@ -11,6 +11,7 @@ class DateRange:
     def __init__(self, start: datetime.datetime=None, end: datetime.datetime=None):
         self.start = start or datetime.datetime.min
         self.end = end or datetime.datetime.max
+        assert self.start <= self.end
 
     def overlaps(self, other):
         """

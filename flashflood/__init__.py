@@ -102,7 +102,7 @@ class FlashFlood:
                 event_date = datetime_from_timestamp(item['timestamp'])
                 if event_date in search_range:
                     yield Event(item['event_id'], event_date, collation.body.read(item['size']))
-                elif search_range.end < event_date:
+                elif event_date in search_range.future:
                     break
 
     def _lookup_event(self, event_id):
