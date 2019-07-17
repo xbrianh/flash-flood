@@ -8,7 +8,7 @@ from collections import namedtuple
 
 import boto3
 
-from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, distant_past, far_future, DateRange
+from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange
 
 
 s3 = boto3.resource("s3")
@@ -94,15 +94,15 @@ class FlashFlood:
         self._delete_collations(collations_to_delete)
         return manifest
 
-    def events(self, from_date=distant_past, to_date=far_future):
+    def events(self, from_date=None, to_date=None):
         search_range = DateRange(from_date, to_date)
         for collation_id in self._collation_ids(from_date, to_date):
             collation = self._get_collation(collation_id)
             for item in collation.manifest['events']:
                 event_date = datetime_from_timestamp(item['timestamp'])
-                if search_range.contains(event_date):
+                if event_date in search_range:
                     yield Event(item['event_id'], event_date, collation.body.read(item['size']))
-                elif to_date < event_date:
+                elif search_range.end < event_date:
                     break
 
     def _lookup_event(self, event_id):
@@ -146,7 +146,7 @@ class FlashFlood:
                         events=events)
         self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(new_blob_data)))
 
-    def event_urls(self, from_date=distant_past, to_date=far_future, maximum_number_of_results=1):
+    def event_urls(self, from_date=None, to_date=None, maximum_number_of_results=1):
         urls = list()
         for collation_id in self._collation_ids(from_date, to_date):
             manifest = self._get_manifest(collation_id)
@@ -213,17 +213,14 @@ class FlashFlood:
 
     def _collation_ids(self, from_date=None, to_date=None):
         # TODO: heuristic to find from_date in bucket listing -xbrianh
-        from_date = from_date or distant_past
-        to_date = to_date or far_future
-        if from_date <= to_date:
-            search_range = DateRange(from_date or distant_past, to_date or far_future)
-            for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
-                collation_id = _CollationID.from_key(item.key)
-                collation_range = DateRange(collation_id.start_date, collation_id.end_date)
-                if collation_range.overlaps(search_range):
-                    yield collation_id
-                elif to_date < collation_id.start_date:
-                    break
+        search_range = DateRange(from_date, to_date)
+        for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
+            collation_id = _CollationID.from_key(item.key)
+            collation_range = DateRange(collation_id.start_date, collation_id.end_date)
+            if collation_range in search_range:
+                yield collation_id
+            elif collation_id.start_date in search_range.future:
+                break
 
     def _delete_all_collations(self):
         collation_ids = [collation_id
@@ -234,26 +231,21 @@ class FlashFlood:
         for item in self.bucket.objects.filter(Prefix=self.root_prefix):
             item.delete()
 
-def events_from_urls(url_info, from_date=distant_past, to_date=far_future):
+def events_from_urls(url_info, from_date=None, to_date=None):
     search_range = DateRange(from_date, to_date)
     for urls in url_info:
         manifest = urls['manifest']
-        start_byte = 0
         for event_info in manifest['events']:
-            if from_date < datetime_from_timestamp(event_info['timestamp']):
+            if datetime_from_timestamp(event_info['timestamp']) in search_range:
                 break
-            else:
-                start_byte += event_info['size']
-        else:
-            continue
-        byte_range = f"bytes={start_byte}-{manifest['size']-1}"
+        byte_range = f"bytes={event_info['start']}-{manifest['size']-1}"
         resp = requests.get(urls['events'], headers=dict(Range=byte_range), stream=True)
         resp.raise_for_status()
         for item in manifest['events']:
             event_date = datetime_from_timestamp(item['timestamp'])
-            if search_range.contains(event_date):
+            if event_date in search_range:
                 yield Event(item['event_id'], event_date, resp.raw.read(item['size']))
-            elif to_date < event_date:
+            elif event_date in search_range.future:
                 break
 
 class FlashFloodException(Exception):

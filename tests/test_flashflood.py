@@ -11,7 +11,7 @@ pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noq
 sys.path.insert(0, pkg_root)  # noqa
 
 import flashflood
-from flashflood.util import datetime_from_timestamp, distant_past
+from flashflood.util import datetime_from_timestamp
 
 
 class TestFlashFlood(unittest.TestCase):
@@ -110,6 +110,8 @@ class TestFlashFlood(unittest.TestCase):
                     self.assertGreater(event.date, from_date)
                 retrieved_events.extend(new_retrieved_events)
                 from_date = datetime_from_timestamp(event_urls[-1]['manifest']['to_date'])
+                if not (from_date < to_date):
+                    break
             self.assertEqual(len(dates) - 2, len(retrieved_events))
 
     # TODO: and DateRange tests
