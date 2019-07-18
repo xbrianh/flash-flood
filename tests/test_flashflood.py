@@ -34,13 +34,13 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_get_event(self):
         events = self.generate_events(10, journal=False)
-        with self.subTest("Get an event before journal"):
+        with self.subTest("Get event before journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, events[event_id].data)
         self.flashflood.journal(10)
-        with self.subTest("Get an event after journal"):
+        with self.subTest("Get event after journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 event = self.flashflood.get_event(event_id)
@@ -51,7 +51,7 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_update_event(self):
         events = self.generate_events(10, journal=False)
-        with self.subTest("Update an event before journal"):
+        with self.subTest("Update event before journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 new_data = os.urandom(5)
@@ -60,7 +60,7 @@ class TestFlashFlood(unittest.TestCase):
                 self.assertEqual(event.data, new_data)
                 events[event.event_id] = event
         self.flashflood.journal(10)
-        with self.subTest("Update an event after journal"):
+        with self.subTest("Update event after journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 new_data = os.urandom(5)
@@ -68,7 +68,7 @@ class TestFlashFlood(unittest.TestCase):
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, new_data)
                 events[event.event_id] = event
-        with self.subTest("Get events after update"):
+        with self.subTest("Replay after event update"):
             for event in self.flashflood.replay():
                 self.assertEqual(event.data, events[event.event_id].data)
 
