@@ -187,7 +187,7 @@ class FlashFlood:
             if number_of_parts == len(journal_ids):
                 break
         else:
-            raise FlashFloodCollationError(f"Available parts ({len(journal_ids)}) less than {number_of_parts}")
+            raise FlashFloodJournalingError(f"Available parts ({len(journal_ids)}) less than {number_of_parts}")
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = [e.submit(self._get_journal, journal_id, buffered=True)
                        for journal_id in journal_ids]
@@ -251,7 +251,7 @@ def replay_with_urls(url_info, from_date=None, to_date=None):
 class FlashFloodException(Exception):
     pass
 
-class FlashFloodCollationError(FlashFloodException):
+class FlashFloodJournalingError(FlashFloodException):
     pass
 
 class FlashFloodEventNotFound(FlashFloodException):

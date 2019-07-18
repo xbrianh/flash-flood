@@ -132,7 +132,7 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_journal(self):
         self.generate_events(1, journal=False)
-        with self.assertRaises(flashflood.FlashFloodCollationError):
+        with self.assertRaises(flashflood.FlashFloodJournalingError):
             self.flashflood.journal(number_of_events=2)
 
     def test_urls(self):
