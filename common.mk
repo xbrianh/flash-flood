@@ -1,4 +1,4 @@
-# Dependencies: git pandoc moreutils httpie
+# Dependencies: git pandoc moreutils httpie twine
 
 SHELL=/bin/bash -eo pipefail
 
@@ -15,6 +15,9 @@ release_patch:
 	$(MAKE) release
 
 release:
+	@ifeq ($(shell which twine),)
+	$(error Please install twine using "pip install twine")
+	endif
 	@if [[ -z $$TAG ]]; then echo "Use release_{major,minor,patch}"; exit 1; fi
 	git pull
 	git clean -x --force $$(python setup.py --name)
