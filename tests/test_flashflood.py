@@ -30,17 +30,17 @@ class TestFlashFlood(unittest.TestCase):
                 f.result()
 
     def tearDown(self):
-        self.flashflood._delete_all_collations()
+        self.flashflood._delete_all_journals()
 
     def test_get_event(self):
-        events = self.generate_events(10, collate=False)
-        with self.subTest("Get an event before collation"):
+        events = self.generate_events(10, journal=False)
+        with self.subTest("Get an event before journal"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, events[event_id].data)
-        self.flashflood.collate(10)
-        with self.subTest("Get an event after collation"):
+        self.flashflood.journal(10)
+        with self.subTest("Get an event after journal"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 event = self.flashflood.get_event(event_id)
@@ -50,8 +50,8 @@ class TestFlashFlood(unittest.TestCase):
                 self.flashflood.get_event("no_such_event")
 
     def test_update_event(self):
-        events = self.generate_events(10, collate=False)
-        with self.subTest("Update an event before collation"):
+        events = self.generate_events(10, journal=False)
+        with self.subTest("Update an event before journal"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 new_data = os.urandom(5)
@@ -59,8 +59,8 @@ class TestFlashFlood(unittest.TestCase):
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, new_data)
                 events[event.event_id] = event
-        self.flashflood.collate(10)
-        with self.subTest("Update an event after collation"):
+        self.flashflood.journal(10)
+        with self.subTest("Update an event after journal"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 new_data = os.urandom(5)
@@ -69,28 +69,28 @@ class TestFlashFlood(unittest.TestCase):
                 self.assertEqual(event.data, new_data)
                 events[event.event_id] = event
         with self.subTest("Get events after update"):
-            for event in self.flashflood.events():
+            for event in self.flashflood.replay():
                 self.assertEqual(event.data, events[event.event_id].data)
 
     def test_events(self):
         events = dict()
         events.update(self.generate_events())
-        events.update(self.generate_events(5, collate=False))
-        retrieved_events = {event.event_id: event for event in self.flashflood.events()}
+        events.update(self.generate_events(5, journal=False))
+        retrieved_events = {event.event_id: event for event in self.flashflood.replay()}
         for event_id in events:
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
-    def test_ordering(self, number_of_collations=3, items_per_collation=3):
-        events = self.generate_events(number_of_collations * items_per_collation, collate=False)
-        for _ in range(number_of_collations):
-            self.flashflood.collate(items_per_collation)
+    def test_ordering(self, number_of_journals=3, events_per_journal=3):
+        events = self.generate_events(number_of_journals * events_per_journal, journal=False)
+        for _ in range(number_of_journals):
+            self.flashflood.journal(events_per_journal)
         dates = [e.date for e in events.values()]
 
         with self.subTest("events should be returned in order with date > from_date"):
             ordered_dates = sorted(dates)
             from_date = ordered_dates[0]
             to_date = ordered_dates[-2]
-            retrieved_events = [event for event in self.flashflood.events(from_date, to_date)]
+            retrieved_events = [event for event in self.flashflood.replay(from_date, to_date)]
             for event in retrieved_events:
                 self.assertGreater(event.date, from_date)
                 self.assertLessEqual(event.date, to_date)
@@ -102,14 +102,14 @@ class TestFlashFlood(unittest.TestCase):
             to_date = ordered_dates[-2]
             retrieved_events = list()
             while True:
-                event_urls = self.flashflood.event_urls(from_date, to_date, maximum_number_of_results=1)
-                if not event_urls:
+                replay_urls = self.flashflood.replay_urls(from_date, to_date, maximum_number_of_results=1)
+                if not replay_urls:
                     break
-                new_retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date, to_date)]
+                new_retrieved_events = [event for event in flashflood.replay_with_urls(replay_urls, from_date, to_date)]
                 for event in new_retrieved_events:
                     self.assertGreater(event.date, from_date)
                 retrieved_events.extend(new_retrieved_events)
-                from_date = datetime_from_timestamp(event_urls[-1]['manifest']['to_date'])
+                from_date = datetime_from_timestamp(replay_urls[-1]['manifest']['to_date'])
                 if not (from_date < to_date):
                     break
             self.assertEqual(len(dates) - 2, len(retrieved_events))
@@ -118,39 +118,39 @@ class TestFlashFlood(unittest.TestCase):
 
     def test_url_range(self):
         """
-        Partial date requests should download only a range of the collation
+        Partial date requests should download only a range of the journal
         """
         events = self.generate_events(10)
         events = sorted([e for e in events.values()], key=lambda e: e.date)
         from_date = events[3].date
-        event_urls = self.flashflood.event_urls(from_date)
-        retrieved_events = [event for event in flashflood.events_from_urls(event_urls, from_date)]
+        replay_urls = self.flashflood.replay_urls(from_date)
+        retrieved_events = [event for event in flashflood.replay_with_urls(replay_urls, from_date)]
         for event in events[:4]:
             self.assertNotIn(event, retrieved_events)
         for event in events[4:]:
             self.assertIn(event, retrieved_events)
 
-    def test_collation(self):
-        self.generate_events(1, collate=False)
+    def test_journal(self):
+        self.generate_events(1, journal=False)
         with self.assertRaises(flashflood.FlashFloodCollationError):
-            self.flashflood.collate(number_of_events=2)
+            self.flashflood.journal(number_of_events=2)
 
     def test_urls(self):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events())
-        event_urls = self.flashflood.event_urls(maximum_number_of_results=2)
+        replay_urls = self.flashflood.replay_urls(maximum_number_of_results=2)
         retrieved_events = {event.event_id: event
-                            for event in flashflood.events_from_urls(event_urls)}
+                            for event in flashflood.replay_with_urls(replay_urls)}
         for event_id in events:
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
-    def test_get_new_collations(self):
-        events = self.generate_events(3, collate=False)
-        new_collations = [c for c in self.flashflood._get_new_collations(len(events) - 1)]
-        self.assertEqual(len(events) - 1, len(new_collations))
+    def test_get_new_journals(self):
+        events = self.generate_events(3, journal=False)
+        new_journals = [c for c in self.flashflood._get_new_journals(len(events) - 1)]
+        self.assertEqual(len(events) - 1, len(new_journals))
 
-    def generate_events(self, number_of_events=7, collate=True):
+    def generate_events(self, number_of_events=7, journal=True):
         def _put():
             event_id = str(uuid4()) + ".asdj__argh"
             return self.flashflood.put(os.urandom(3), event_id, self._random_timestamp())
@@ -158,8 +158,8 @@ class TestFlashFlood(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = [e.submit(_put) for _ in range(number_of_events)]
             events = {f.result().event_id: f.result() for f in futures}
-        if collate:
-            self.flashflood.collate(number_of_events=number_of_events)
+        if journal:
+            self.flashflood.journal(number_of_events=number_of_events)
         return events
 
     def _random_timestamp(self):

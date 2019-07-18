@@ -16,9 +16,9 @@ s3_client = boto3.client("s3")
 
 
 Event = namedtuple("Event", "event_id date data")
-_Collation = namedtuple("_Collation", "id_ manifest body")
+_Journal = namedtuple("_Journal", "id_ manifest body")
 
-class _CollationID(str):
+class _JournalID(str):
     DELIMITER = "--"
 
     @classmethod
@@ -54,7 +54,7 @@ class FlashFlood:
     def __init__(self, bucket, root_prefix):
         self.bucket = s3.Bucket(bucket)
         self.root_prefix = root_prefix
-        self._collation_pfx = f"{root_prefix}/collations"
+        self._journal_pfx = f"{root_prefix}/journals"
         self._blobs_pfx = f"{root_prefix}/blobs"
         self._new_pfx = f"{root_prefix}/new"
         self._index_pfx = f"{root_prefix}/index"
@@ -63,45 +63,45 @@ class FlashFlood:
         date = date or datetime.utcnow()
         timestamp = datetime_to_timestamp(date)
         event_id = event_id or str(uuid4())
-        assert _CollationID.DELIMITER not in event_id
+        assert _JournalID.DELIMITER not in event_id
         blob_id = str(uuid4())
-        collation_id = _CollationID.make(timestamp, None, blob_id)
-        manifest = dict(collation_id=collation_id,
+        journal_id = _JournalID.make(timestamp, None, blob_id)
+        manifest = dict(journal_id=journal_id,
                         from_date=timestamp,
                         to_date=timestamp,
                         size=len(data),
                         events=[dict(event_id=event_id, timestamp=timestamp, start=0, size=len(data))])
-        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(data)), is_new=True)
+        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(data)), is_new=True)
         return Event(event_id, date, data)
 
-    def collate(self, number_of_events=10):
+    def journal(self, number_of_events=10):
         events = list()
-        collations_to_delete = list()
+        journals_to_delete = list()
         combined_data = b""
-        for collation in self._get_new_collations(number_of_events):
-            for i in collation.manifest['events']:
+        for journal in self._get_new_journals(number_of_events):
+            for i in journal.manifest['events']:
                 events.append({**i, **dict(start=len(combined_data))})
-            combined_data += collation.body.read()
-            collations_to_delete.append(collation.id_)
+            combined_data += journal.body.read()
+            journals_to_delete.append(journal.id_)
         blob_id = str(uuid4())
-        collation_id = _CollationID.make(events[0]['timestamp'], events[-1]['timestamp'], blob_id)
-        manifest = dict(collation_id=collation_id,
+        journal_id = _JournalID.make(events[0]['timestamp'], events[-1]['timestamp'], blob_id)
+        manifest = dict(journal_id=journal_id,
                         from_date=events[0]['timestamp'],
                         to_date=events[-1]['timestamp'],
                         size=len(combined_data),
                         events=events)
-        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(combined_data)))
-        self._delete_collations(collations_to_delete)
+        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(combined_data)))
+        self._delete_journals(journals_to_delete)
         return manifest
 
-    def events(self, from_date=None, to_date=None):
+    def replay(self, from_date=None, to_date=None):
         search_range = DateRange(from_date, to_date)
-        for collation_id in self._collation_ids(from_date, to_date):
-            collation = self._get_collation(collation_id)
-            for item in collation.manifest['events']:
+        for journal_id in self._journal_ids(from_date, to_date):
+            journal = self._get_journal(journal_id)
+            for item in journal.manifest['events']:
                 event_date = datetime_from_timestamp(item['timestamp'])
                 if event_date in search_range:
-                    yield Event(item['event_id'], event_date, collation.body.read(item['size']))
+                    yield Event(item['event_id'], event_date, journal.body.read(item['size']))
                 elif event_date in search_range.future:
                     break
 
@@ -110,25 +110,25 @@ class FlashFlood:
             key = next(iter(self.bucket.objects.filter(Prefix=f"{self._index_pfx}/{event_id}"))).key
         except StopIteration:
             raise FlashFloodEventNotFound()
-        collation_id = _CollationID(self.bucket.Object(key).metadata['collation_id'])
-        manifest = self._get_manifest(collation_id)
+        journal_id = _JournalID(self.bucket.Object(key).metadata['journal_id'])
+        manifest = self._get_manifest(journal_id)
         for item in manifest['events']:
             if event_id == item['event_id']:
                 break
         else:
-            raise FlashFloodException(f"Event {event_id} not found in {collation_id}")
-        return collation_id, manifest, item
+            raise FlashFloodException(f"Event {event_id} not found in {journal_id}")
+        return journal_id, manifest, item
 
     def get_event(self, event_id):
-        collation_id, manifest, item = self._lookup_event(event_id)
-        blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+        journal_id, manifest, item = self._lookup_event(event_id)
+        blob_key = f"{self._blobs_pfx}/{journal_id.blob_id}"
         byte_range = f"bytes={item['start']}-{item['start'] + item['size'] - 1}"
         data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
         return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
 
     def update_event(self, new_event_data, event_id):
-        collation_id, manifest, item = self._lookup_event(event_id)
-        blob_key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+        journal_id, manifest, item = self._lookup_event(event_id)
+        blob_key = f"{self._blobs_pfx}/{journal_id.blob_id}"
         blob_data = self.bucket.Object(blob_key).get()['Body'].read()
         new_blob_data = (blob_data[:item['start']]
                          + new_event_data
@@ -139,99 +139,99 @@ class FlashFlood:
             item['start'] = data_size
             data_size += item['size']
         events = manifest['events']
-        manifest = dict(collation_id=collation_id,
+        manifest = dict(journal_id=journal_id,
                         from_date=events[0]['timestamp'],
                         to_date=events[-1]['timestamp'],
                         size=len(new_blob_data),
                         events=events)
-        self._upload_collation(_Collation(collation_id, manifest, io.BytesIO(new_blob_data)))
+        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(new_blob_data)))
 
-    def event_urls(self, from_date=None, to_date=None, maximum_number_of_results=1):
+    def replay_urls(self, from_date=None, to_date=None, maximum_number_of_results=1):
         urls = list()
-        for collation_id in self._collation_ids(from_date, to_date):
-            manifest = self._get_manifest(collation_id)
-            collation_url = self._generate_presigned_url(collation_id)
-            urls.append(dict(manifest=manifest, events=collation_url))
+        for journal_id in self._journal_ids(from_date, to_date):
+            manifest = self._get_manifest(journal_id)
+            journal_url = self._generate_presigned_url(journal_id)
+            urls.append(dict(manifest=manifest, events=journal_url))
             if len(urls) == maximum_number_of_results:
                 break
         return urls
 
-    def _upload_collation(self, collation, is_new=False):
-        key = f"{self._collation_pfx}/{collation.id_}"
-        blob_key = f"{self._blobs_pfx}/{collation.id_.blob_id}"
-        self.bucket.Object(blob_key).upload_fileobj(collation.body,
-                                                    ExtraArgs=dict(Metadata=dict(collation_id=collation.id_)))
-        self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(collation.manifest).encode("utf-8")))
+    def _upload_journal(self, journal, is_new=False):
+        key = f"{self._journal_pfx}/{journal.id_}"
+        blob_key = f"{self._blobs_pfx}/{journal.id_.blob_id}"
+        self.bucket.Object(blob_key).upload_fileobj(journal.body,
+                                                    ExtraArgs=dict(Metadata=dict(journal_id=journal.id_)))
+        self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(journal.manifest).encode("utf-8")))
         if is_new:
-            self.bucket.Object(f"{self._new_pfx}/{collation.id_}").upload_fileobj(io.BytesIO(b""))
-        for item in collation.manifest['events']:
+            self.bucket.Object(f"{self._new_pfx}/{journal.id_}").upload_fileobj(io.BytesIO(b""))
+        for item in journal.manifest['events']:
             key = f"{self._index_pfx}/{item['event_id']}"
             self.bucket.Object(key).upload_fileobj(io.BytesIO(b""),
-                                                   ExtraArgs=dict(Metadata=dict(collation_id=collation.id_)))
+                                                   ExtraArgs=dict(Metadata=dict(journal_id=journal.id_)))
 
-    def _get_manifest(self, collation_id):
-        key = f"{self._collation_pfx}/{collation_id}"
+    def _get_manifest(self, journal_id):
+        key = f"{self._journal_pfx}/{journal_id}"
         return json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
 
-    def _get_collation(self, collation_id, buffered=False):
-        key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+    def _get_journal(self, journal_id, buffered=False):
+        key = f"{self._blobs_pfx}/{journal_id.blob_id}"
         body = self.bucket.Object(key).get()['Body']
         if buffered:
             body = io.BytesIO(body.read())
-        return _Collation(collation_id, self._get_manifest(collation_id), body)
+        return _Journal(journal_id, self._get_manifest(journal_id), body)
 
-    def _get_new_collations(self, number_of_parts):
-        collation_ids = list()
+    def _get_new_journals(self, number_of_parts):
+        journal_ids = list()
         for item in self.bucket.objects.filter(Prefix=self._new_pfx):
-            collation_ids.append(_CollationID.from_key(item.key))
-            if number_of_parts == len(collation_ids):
+            journal_ids.append(_JournalID.from_key(item.key))
+            if number_of_parts == len(journal_ids):
                 break
         else:
-            raise FlashFloodCollationError(f"Available parts ({len(collation_ids)}) less than {number_of_parts}")
+            raise FlashFloodCollationError(f"Available parts ({len(journal_ids)}) less than {number_of_parts}")
         with ThreadPoolExecutor(max_workers=10) as e:
-            futures = [e.submit(self._get_collation, collation_id, buffered=True)
-                       for collation_id in collation_ids]
-            collations = [f.result() for f in as_completed(futures)]
-        collations.sort(key=lambda collation: collation.id_)
-        return collations
+            futures = [e.submit(self._get_journal, journal_id, buffered=True)
+                       for journal_id in journal_ids]
+            journals = [f.result() for f in as_completed(futures)]
+        journals.sort(key=lambda journal: journal.id_)
+        return journals
 
-    def _generate_presigned_url(self, collation_id):
-        key = f"{self._blobs_pfx}/{collation_id.blob_id}"
+    def _generate_presigned_url(self, journal_id):
+        key = f"{self._blobs_pfx}/{journal_id.blob_id}"
         return s3_client.generate_presigned_url(ClientMethod="get_object",
                                                 Params=dict(Bucket=self.bucket.name, Key=key))
 
-    def _delete_collation(self, collation_id):
-        self.bucket.Object(f"{self._collation_pfx}/{collation_id}").delete()
-        self.bucket.Object(f"{self._blobs_pfx}/{collation_id.blob_id}").delete()
-        self.bucket.Object(f"{self._new_pfx}/{collation_id}").delete()
+    def _delete_journal(self, journal_id):
+        self.bucket.Object(f"{self._journal_pfx}/{journal_id}").delete()
+        self.bucket.Object(f"{self._blobs_pfx}/{journal_id.blob_id}").delete()
+        self.bucket.Object(f"{self._new_pfx}/{journal_id}").delete()
 
-    def _delete_collations(self, collation_ids):
+    def _delete_journals(self, journal_ids):
         with ThreadPoolExecutor(max_workers=10) as e:
-            futures = [e.submit(self._delete_collation, _id) for _id in collation_ids]
+            futures = [e.submit(self._delete_journal, _id) for _id in journal_ids]
             for f in as_completed(futures):
                 f.result()
 
-    def _collation_ids(self, from_date=None, to_date=None):
+    def _journal_ids(self, from_date=None, to_date=None):
         # TODO: heuristic to find from_date in bucket listing -xbrianh
         search_range = DateRange(from_date, to_date)
-        for item in self.bucket.objects.filter(Prefix=self._collation_pfx):
-            collation_id = _CollationID.from_key(item.key)
-            collation_range = DateRange(collation_id.start_date, collation_id.end_date)
-            if collation_range in search_range:
-                yield collation_id
-            elif collation_id.start_date in search_range.future:
+        for item in self.bucket.objects.filter(Prefix=self._journal_pfx):
+            journal_id = _JournalID.from_key(item.key)
+            journal_range = DateRange(journal_id.start_date, journal_id.end_date)
+            if journal_range in search_range:
+                yield journal_id
+            elif journal_id.start_date in search_range.future:
                 break
 
-    def _delete_all_collations(self):
-        collation_ids = [collation_id
-                         for collation_id in self._collation_ids()]
-        self._delete_collations(collation_ids)
+    def _delete_all_journals(self):
+        journal_ids = [journal_id
+                       for journal_id in self._journal_ids()]
+        self._delete_journals(journal_ids)
 
     def _destroy(self):
         for item in self.bucket.objects.filter(Prefix=self.root_prefix):
             item.delete()
 
-def events_from_urls(url_info, from_date=None, to_date=None):
+def replay_with_urls(url_info, from_date=None, to_date=None):
     search_range = DateRange(from_date, to_date)
     for urls in url_info:
         manifest = urls['manifest']
