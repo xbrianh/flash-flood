@@ -1,0 +1,16 @@
+language: python
+cache:
+  pip: true
+python:
+- 3.6
+dist: trusty
+install:
+- pip install -r requirements-dev.txt
+script:
+- set -eo pipefail
+- make test
+after_success:
+- bash <(curl -s https://codecov.io/bash)
+env:
+  global:
+  - S3_BUCKET=org-hca-dss-test

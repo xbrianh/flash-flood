@@ -12,13 +12,14 @@ sys.path.insert(0, pkg_root)  # noqa
 
 import flashflood
 from flashflood.util import datetime_from_timestamp
+from tests import infra
 
 
 class TestFlashFlood(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.root_pfx = f"flashflood_test_{uuid4()}"
-        cls.bucket = boto3.resource("s3").Bucket(os.environ['FLASHFLOOD_TEST_BUCKET'])
+        cls.bucket = boto3.resource("s3").Bucket(infra.get_env("S3_BUCKET"))
         cls.flashflood = flashflood.FlashFlood(cls.bucket.name, cls.root_pfx)
 
     @classmethod

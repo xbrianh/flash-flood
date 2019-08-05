@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "hcaDssCiCdS3WriteAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:AbortMultipartUpload",
+        "s3:DeleteBucketPolicy",
+        "s3:DeleteBucketWebsite",
+        "s3:DeleteObject*",
+        "s3:PutObject*",
+        "s3:Replicate*",
+        "s3:RestoreObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::$S3_BUCKET/*"
+      ]
+    }
+  ]
+}
