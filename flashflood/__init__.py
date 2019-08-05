@@ -6,13 +6,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import namedtuple
 
-import boto3
-
 from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange
-
-
-s3 = boto3.resource("s3")
-s3_client = boto3.client("s3")
 
 
 Event = namedtuple("Event", "event_id date data")
@@ -51,8 +45,9 @@ class _JournalID(str):
             return datetime_from_timestamp(end_date)
 
 class FlashFlood:
-    def __init__(self, bucket, root_prefix):
-        self.bucket = s3.Bucket(bucket)
+    def __init__(self, s3_resource, bucket, root_prefix):
+        self.s3 = s3_resource
+        self.bucket = self.s3.Bucket(bucket)
         self.root_prefix = root_prefix
         self._journal_pfx = f"{root_prefix}/journals"
         self._blobs_pfx = f"{root_prefix}/blobs"
@@ -197,8 +192,8 @@ class FlashFlood:
 
     def _generate_presigned_url(self, journal_id):
         key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        return s3_client.generate_presigned_url(ClientMethod="get_object",
-                                                Params=dict(Bucket=self.bucket.name, Key=key))
+        return self.s3.meta.client.generate_presigned_url(ClientMethod="get_object",
+                                                          Params=dict(Bucket=self.bucket.name, Key=key))
 
     def _delete_journal(self, journal_id):
         self.bucket.Object(f"{self._journal_pfx}/{journal_id}").delete()

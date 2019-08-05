@@ -19,8 +19,9 @@ class TestFlashFlood(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.root_pfx = f"flashflood_test_{uuid4()}"
-        cls.bucket = boto3.resource("s3").Bucket(infra.get_env("S3_BUCKET"))
-        cls.flashflood = flashflood.FlashFlood(cls.bucket.name, cls.root_pfx)
+        cls.s3 = boto3.resource("s3")
+        cls.bucket = cls.s3.Bucket(infra.get_env("S3_BUCKET"))
+        cls.flashflood = flashflood.FlashFlood(cls.s3, cls.bucket.name, cls.root_pfx)
 
     @classmethod
     def tearDownClass(cls):
