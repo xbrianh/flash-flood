@@ -69,15 +69,30 @@ class FlashFlood:
         self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(data)), is_new=True)
         return Event(event_id, date, data)
 
-    def journal(self, number_of_events=10):
+    def journal(self, minimum_number_of_events=100, minimum_size=None):
+        assert 2 <= minimum_number_of_events
+        minimum_size = minimum_size or 0
+        journals_to_combine = list()
+        number_of_events, size = 0, 0
+        for journal in self._new_journals():
+            size += journal.manifest['size']
+            number_of_events += len(journal.manifest['events'])
+            journals_to_combine.append(journal)
+            if minimum_number_of_events <= number_of_events and minimum_size <= size:
+                break
+        if minimum_number_of_events > number_of_events:
+            raise FlashFloodJournalingError(f"Journal condition: minimum_number_of_events={minimum_number_of_events}")
+        if minimum_size > size:
+            raise FlashFloodJournalingError(f"Journal condition: minimum_size={minimum_size}")
+        return self.combine_journals(journals_to_combine)
+
+    def combine_journals(self, journals_to_combine):
         events = list()
-        journals_to_delete = list()
         combined_data = b""
-        for journal in self._get_new_journals(number_of_events):
-            for i in journal.manifest['events']:
-                events.append({**i, **dict(offset=len(combined_data))})
+        for journal in journals_to_combine:
+            for e in journal.manifest['events']:
+                events.append({**e, **dict(offset=len(combined_data))})
             combined_data += journal.body.read()
-            journals_to_delete.append(journal.id_)
         blob_id = str(uuid4())
         journal_id = _JournalID.make(events[0]['timestamp'], events[-1]['timestamp'], blob_id)
         manifest = dict(journal_id=journal_id,
@@ -86,7 +101,7 @@ class FlashFlood:
                         size=len(combined_data),
                         events=events)
         self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(combined_data)))
-        self._delete_journals(journals_to_delete)
+        self._delete_journals([journal.id_ for journal in journals_to_combine])
         return manifest
 
     def replay(self, from_date=None, to_date=None):
@@ -168,27 +183,14 @@ class FlashFlood:
         key = f"{self._journal_pfx}/{journal_id}"
         return json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
 
-    def _get_journal(self, journal_id, buffered=False):
+    def _get_journal(self, journal_id):
         key = f"{self._blobs_pfx}/{journal_id.blob_id}"
         body = self.bucket.Object(key).get()['Body']
-        if buffered:
-            body = io.BytesIO(body.read())
         return _Journal(journal_id, self._get_manifest(journal_id), body)
 
-    def _get_new_journals(self, number_of_parts):
-        journal_ids = list()
+    def _new_journals(self):
         for item in self.bucket.objects.filter(Prefix=self._new_pfx):
-            journal_ids.append(_JournalID.from_key(item.key))
-            if number_of_parts == len(journal_ids):
-                break
-        else:
-            raise FlashFloodJournalingError(f"Available parts ({len(journal_ids)}) less than {number_of_parts}")
-        with ThreadPoolExecutor(max_workers=10) as e:
-            futures = [e.submit(self._get_journal, journal_id, buffered=True)
-                       for journal_id in journal_ids]
-            journals = [f.result() for f in as_completed(futures)]
-        journals.sort(key=lambda journal: journal.id_)
-        return journals
+            yield self._get_journal(_JournalID.from_key(item.key))
 
     def _generate_presigned_url(self, journal_id):
         key = f"{self._blobs_pfx}/{journal_id.blob_id}"

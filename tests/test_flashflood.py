@@ -41,7 +41,7 @@ class TestFlashFlood(unittest.TestCase):
                 event_id = [event_id for event_id in events][randint(0, 9)]
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, events[event_id].data)
-        self.flashflood.journal(10)
+        self.flashflood.journal(minimum_number_of_events=10)
         with self.subTest("Get event after journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
@@ -61,7 +61,7 @@ class TestFlashFlood(unittest.TestCase):
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, new_data)
                 events[event.event_id] = event
-        self.flashflood.journal(10)
+        self.flashflood.journal(minimum_number_of_events=10)
         with self.subTest("Update event after journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
@@ -85,7 +85,7 @@ class TestFlashFlood(unittest.TestCase):
     def test_ordering(self, number_of_journals=3, events_per_journal=3):
         events = self.generate_events(number_of_journals * events_per_journal, journal=False)
         for _ in range(number_of_journals):
-            self.flashflood.journal(events_per_journal)
+            self.flashflood.journal(minimum_number_of_events=events_per_journal)
         dates = [e.date for e in events.values()]
 
         with self.subTest("events should be returned in order with date > from_date"):
@@ -133,9 +133,16 @@ class TestFlashFlood(unittest.TestCase):
             self.assertIn(event, retrieved_events)
 
     def test_journal(self):
-        self.generate_events(1, journal=False)
-        with self.assertRaises(flashflood.FlashFloodJournalingError):
-            self.flashflood.journal(number_of_events=2)
+        self.generate_events(1, journal=False, event_size=1)
+        with self.subTest("raise FlashFloodJournalingError when attempting to journal more new events than available"):
+            with self.assertRaises(flashflood.FlashFloodJournalingError):
+                self.flashflood.journal(minimum_number_of_events=2)
+        with self.subTest("raise FlashFloodJournalingError when new event data doesn't meet size threshold"):
+            with self.assertRaises(flashflood.FlashFloodJournalingError):
+                self.flashflood.journal(minimum_size=10)
+        self.generate_events(4, journal=False, event_size=1)
+        with self.subTest("Should succeed when minimum number and size thresholds are met"):
+            self.flashflood.journal(minimum_number_of_events=5, minimum_size=5)
 
     def test_urls(self):
         events = dict()
@@ -148,20 +155,21 @@ class TestFlashFlood(unittest.TestCase):
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
     def test_get_new_journals(self):
-        events = self.generate_events(3, journal=False)
-        new_journals = [c for c in self.flashflood._get_new_journals(len(events) - 1)]
-        self.assertEqual(len(events) - 1, len(new_journals))
+        number_of_events = 3
+        self.generate_events(number_of_events, journal=False)
+        new_journals = [c for c in self.flashflood._new_journals()]
+        self.assertEqual(number_of_events, len(new_journals))
 
-    def generate_events(self, number_of_events=7, journal=True):
+    def generate_events(self, number_of_events=7, journal=True, event_size=3):
         def _put():
             event_id = str(uuid4()) + ".asdj__argh"
-            return self.flashflood.put(os.urandom(3), event_id, self._random_timestamp())
+            return self.flashflood.put(os.urandom(event_size), event_id, self._random_timestamp())
 
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = [e.submit(_put) for _ in range(number_of_events)]
             events = {f.result().event_id: f.result() for f in futures}
         if journal:
-            self.flashflood.journal(number_of_events=number_of_events)
+            self.flashflood.journal(minimum_number_of_events=number_of_events)
         return events
 
     def _random_timestamp(self):
