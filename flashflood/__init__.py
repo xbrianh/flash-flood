@@ -115,12 +115,15 @@ class FlashFlood:
                 elif event_date in search_range.future:
                     break
 
-    def _lookup_event(self, event_id):
+    def _journal_for_event(self, event_id):
         try:
             key = next(iter(self.bucket.objects.filter(Prefix=f"{self._index_pfx}/{event_id}"))).key
         except StopIteration:
             raise FlashFloodEventNotFound()
-        journal_id = _JournalID(self.bucket.Object(key).metadata['journal_id'])
+        return _JournalID(self.bucket.Object(key).metadata['journal_id'])
+
+    def _lookup_event(self, event_id):
+        journal_id = self._journal_for_event(event_id)
         manifest = self._get_manifest(journal_id)
         for item in manifest['events']:
             if event_id == item['event_id']:
@@ -128,6 +131,13 @@ class FlashFlood:
         else:
             raise FlashFloodException(f"Event {event_id} not found in {journal_id}")
         return journal_id, manifest, item
+
+    def event_exists(self, event_id):
+        try:
+            self._journal_for_event(event_id)
+            return True
+        except FlashFloodEventNotFound:
+            return False
 
     def get_event(self, event_id):
         journal_id, manifest, item = self._lookup_event(event_id)

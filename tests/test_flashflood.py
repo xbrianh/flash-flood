@@ -39,15 +39,18 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("Get event before journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
+                self.assertTrue(self.flashflood.event_exists(event_id))
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, events[event_id].data)
         self.flashflood.journal(minimum_number_of_events=10)
         with self.subTest("Get event after journaling"):
             for _ in range(3):
                 event_id = [event_id for event_id in events][randint(0, 9)]
+                self.assertTrue(self.flashflood.event_exists(event_id))
                 event = self.flashflood.get_event(event_id)
                 self.assertEqual(event.data, events[event_id].data)
         with self.subTest("Get non-existent event"):
+            self.assertFalse(self.flashflood.event_exists("no_such_event"))
             with self.assertRaises(flashflood.FlashFloodEventNotFound):
                 self.flashflood.get_event("no_such_event")
 
