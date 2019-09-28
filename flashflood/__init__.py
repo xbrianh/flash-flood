@@ -48,6 +48,8 @@ class FlashFlood:
     def __init__(self, s3_resource, bucket, root_prefix):
         self.s3 = s3_resource
         self.bucket = self.s3.Bucket(bucket)
+        if root_prefix.endswith("/"):
+            raise ValueError("Root prefix cannot end with `/`")
         self.root_prefix = root_prefix
         self._journal_pfx = f"{root_prefix}/journals"
         self._blobs_pfx = f"{root_prefix}/blobs"
@@ -235,7 +237,7 @@ class FlashFlood:
         self._delete_journals(journal_ids)
 
     def _destroy(self):
-        for item in self.bucket.objects.filter(Prefix=self.root_prefix):
+        for item in self.bucket.objects.filter(Prefix=f"{self.root_prefix}/"):
             item.delete()
 
 def replay_with_urls(url_info, from_date=None, to_date=None):
