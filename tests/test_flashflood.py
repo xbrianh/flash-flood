@@ -32,7 +32,7 @@ class TestFlashFlood(unittest.TestCase):
                 f.result()
 
     def tearDown(self):
-        self.flashflood._delete_all_journals()
+        self.flashflood._destroy()
 
     def test_get_event(self):
         events = self.generate_events(10, journal=False)
@@ -54,28 +54,55 @@ class TestFlashFlood(unittest.TestCase):
             with self.assertRaises(flashflood.FlashFloodEventNotFound):
                 self.flashflood.get_event("no_such_event")
 
-    def test_update_event(self):
-        events = self.generate_events(10, journal=False)
+    def test_updates_and_deletes(self):
+        events = self.generate_events(15, journal=False)
         with self.subTest("Update event before journaling"):
-            for _ in range(3):
-                event_id = [event_id for event_id in events][randint(0, 9)]
-                new_data = os.urandom(5)
-                self.flashflood.update_event(new_data, event_id)
-                event = self.flashflood.get_event(event_id)
-                self.assertEqual(event.data, new_data)
-                events[event.event_id] = event
-        self.flashflood.journal(minimum_number_of_events=10)
+            self._test_update(events)
+        with self.subTest("Delete event before journaling"):
+            self._test_delete(events)
         with self.subTest("Update event after journaling"):
-            for _ in range(3):
-                event_id = [event_id for event_id in events][randint(0, 9)]
-                new_data = os.urandom(5)
-                self.flashflood.update_event(new_data, event_id)
-                event = self.flashflood.get_event(event_id)
-                self.assertEqual(event.data, new_data)
-                events[event.event_id] = event
+            self._test_update(events, number_of_events_to_journal=4)
+        with self.subTest("Delete event after journaling"):
+            self._test_delete(events, number_of_events_to_journal=4)
         with self.subTest("Replay after event update"):
             for event in self.flashflood.replay():
                 self.assertEqual(event.data, events[event.event_id].data)
+                del events[event.event_id]
+            self.assertEqual(0, len(events))
+
+    def _test_update(self, events, number_of_updates=2, number_of_events_to_journal=0):
+        new_event_data = dict()
+        for _ in range(2):
+            event_id = [event_id for event_id in events][randint(0, len(events) - 1)]
+            new_event_data[event_id] = os.urandom(5)
+            self.flashflood.put(new_event_data[event_id], event_id)
+        if 0 < number_of_events_to_journal:
+            self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal//2)
+            self.flashflood.update()
+            self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal//2)
+        else:
+            self.flashflood.update()
+        for event_id in new_event_data:
+            event = self.flashflood.get_event(event_id)
+            self.assertEqual(event.data, new_event_data[event_id])
+            events[event.event_id] = event
+
+    def _test_delete(self, events, number_of_deletes=2, number_of_events_to_journal=0):
+        deleted_events = list()
+        for _ in range(2):
+            event_id = [event_id for event_id in events][randint(0, len(events) - 1)]
+            deleted_events.append(event_id)
+            del events[event_id]
+            self.flashflood.delete(event_id)
+        if 0 < number_of_events_to_journal:
+            self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal//2)
+            self.flashflood.update()
+            self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal//2)
+        else:
+            self.flashflood.update()
+        for event_id in deleted_events:
+            with self.assertRaises(flashflood.FlashFloodEventNotFound):
+                event = self.flashflood.get_event(event_id)
 
     def test_events(self):
         events = dict()

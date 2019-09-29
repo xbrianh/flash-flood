@@ -6,7 +6,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import namedtuple
 
-from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange
+from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange, S3Deleter
 
 
 Event = namedtuple("Event", "event_id date data")
@@ -54,22 +54,91 @@ class FlashFlood:
         self._journal_pfx = f"{root_prefix}/journals"
         self._blobs_pfx = f"{root_prefix}/blobs"
         self._new_pfx = f"{root_prefix}/new"
+        self._update_pfx = f"{root_prefix}/update"
         self._index_pfx = f"{root_prefix}/index"
 
     def put(self, data, event_id: str=None, date: datetime=None):
+        """
+        Write new event. If event exists, write update marker for event.
+        """
         date = date or datetime.utcnow()
         timestamp = datetime_to_timestamp(date)
         event_id = event_id or str(uuid4())
         assert _JournalID.DELIMITER not in event_id
-        blob_id = str(uuid4())
-        journal_id = _JournalID.make(timestamp, None, blob_id)
-        manifest = dict(journal_id=journal_id,
-                        from_date=timestamp,
-                        to_date=timestamp,
-                        size=len(data),
-                        events=[dict(event_id=event_id, timestamp=timestamp, offset=0, size=len(data))])
-        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(data)), is_new=True)
-        return Event(event_id, date, data)
+        if self.event_exists(event_id):
+            self._upload_update_action(event_id, "update", data)
+            return Event(event_id, None, data)
+        else:
+            blob_id = str(uuid4())
+            journal_id = _JournalID.make(timestamp, None, blob_id)
+            manifest = dict(journal_id=journal_id,
+                            from_date=timestamp,
+                            to_date=timestamp,
+                            size=len(data),
+                            events=[dict(event_id=event_id, timestamp=timestamp, offset=0, size=len(data))])
+            self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(data)), is_new=True)
+            return Event(event_id, date, data)
+
+    def delete(self, event_id):
+        """
+        Write delete marker for event. Raises `FlashFloodEventNotFound` if event doesn't exist
+        """
+        journal_id = self._journal_for_event(event_id)
+        self._upload_update_action(event_id, "delete")
+
+    def _upload_update_action(self, event_id, action, new_event_data=b""):
+        key = f"{self._update_pfx}/{event_id}{_JournalID.DELIMITER}{action}"
+        self.bucket.Object(key).upload_fileobj(io.BytesIO(new_event_data))
+
+    def update(self):
+        """
+        Apply updates for each update and delete marker.
+        """
+        for item in self.bucket.objects.filter(Prefix=self._update_pfx):
+            update_id = item.key.rsplit("/", 1)[1]
+            event_id, action = update_id.rsplit(_JournalID.DELIMITER, 1)
+            try:
+                journal_id = self._journal_for_event(event_id)
+            except FlashFloodEventNotFound:
+                # TODO: delete this marker!
+                continue
+            self._update_journal(journal_id, event_id, action, item.key)
+
+    def _update_journal(self, journal_id, event_id, action, update_marker_key):
+        with S3Deleter(self.bucket) as s3d:
+            journal = self._get_journal(journal_id)
+            journal_data = b""
+            events = list()
+            for e in journal.manifest['events']:
+                event_data = journal.body.read(e['size'])
+                e['offset'] = len(journal_data)
+                if event_id != e['event_id']:
+                    journal_data += event_data
+                    events.append(e)
+                elif "update" == action:
+                    event_data = self.bucket.Object(update_marker_key).get()['Body'].read()
+                    journal_data += event_data
+                    e['size'] = len(event_data)
+                    events.append(e)
+                elif "delete" == action:
+                    s3d.delete(f"{self._index_pfx}/{e['event_id']}")
+                else:
+                    raise Exception(f"No handler for journal update '{action}'")
+            if not journal_data:
+                self._delete_journals([journal.id_])
+            else:
+                from_timestamp = events[0]['timestamp']
+                to_timestamp = events[-1]['timestamp']
+                if from_timestamp == to_timestamp:
+                    to_timestamp = "new"
+                journal.manifest['events'] = events
+                journal.manifest['size'] = len(journal_data)
+                journal.manifest['from_date'] = from_timestamp
+                journal.manifest['to_date'] = to_timestamp
+                new_journal_id = _JournalID.make(from_timestamp, to_timestamp, journal.id_.blob_id)
+                self._upload_journal(_Journal(new_journal_id, journal.manifest, io.BytesIO(journal_data)))
+                if new_journal_id != journal_id:
+                    s3d.delete(f"{self._journal_pfx}/{journal_id}")
 
     def journal(self, minimum_number_of_events=100, minimum_size=None):
         assert 2 <= minimum_number_of_events
@@ -148,26 +217,6 @@ class FlashFlood:
         data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
         return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
 
-    def update_event(self, new_event_data, event_id):
-        journal_id, manifest, item = self._lookup_event(event_id)
-        blob_key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        blob_data = self.bucket.Object(blob_key).get()['Body'].read()
-        new_blob_data = (blob_data[:item['offset']]
-                         + new_event_data
-                         + blob_data[item['offset'] + item['size']:])
-        item['size'] = len(new_event_data)
-        data_size = 0
-        for item in manifest['events']:
-            item['offset'] = data_size
-            data_size += item['size']
-        events = manifest['events']
-        manifest = dict(journal_id=journal_id,
-                        from_date=events[0]['timestamp'],
-                        to_date=events[-1]['timestamp'],
-                        size=len(new_blob_data),
-                        events=events)
-        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(new_blob_data)))
-
     def replay_urls(self, from_date=None, to_date=None, maximum_number_of_results=1):
         urls = list()
         for journal_id in self._journal_ids(from_date, to_date):
@@ -209,16 +258,12 @@ class FlashFlood:
         return self.s3.meta.client.generate_presigned_url(ClientMethod="get_object",
                                                           Params=dict(Bucket=self.bucket.name, Key=key))
 
-    def _delete_journal(self, journal_id):
-        self.bucket.Object(f"{self._journal_pfx}/{journal_id}").delete()
-        self.bucket.Object(f"{self._blobs_pfx}/{journal_id.blob_id}").delete()
-        self.bucket.Object(f"{self._new_pfx}/{journal_id}").delete()
-
     def _delete_journals(self, journal_ids):
-        with ThreadPoolExecutor(max_workers=10) as e:
-            futures = [e.submit(self._delete_journal, _id) for _id in journal_ids]
-            for f in as_completed(futures):
-                f.result()
+        with S3Deleter(self.bucket) as s3d:
+            for journal_id in journal_ids:
+                s3d.delete(f"{self._journal_pfx}/{journal_id}")
+                s3d.delete(f"{self._blobs_pfx}/{journal_id.blob_id}")
+                s3d.delete(f"{self._new_pfx}/{journal_id}")
 
     def _journal_ids(self, from_date=None, to_date=None):
         # TODO: heuristic to find from_date in bucket listing -xbrianh
@@ -231,14 +276,10 @@ class FlashFlood:
             elif journal_id.start_date in search_range.future:
                 break
 
-    def _delete_all_journals(self):
-        journal_ids = [journal_id
-                       for journal_id in self._journal_ids()]
-        self._delete_journals(journal_ids)
-
     def _destroy(self):
-        for item in self.bucket.objects.filter(Prefix=f"{self.root_prefix}/"):
-            item.delete()
+        with S3Deleter(self.bucket) as s3d:
+            for item in self.bucket.objects.filter(Prefix=f"{self.root_prefix}/"):
+                s3d.delete(item.key)
 
 def replay_with_urls(url_info, from_date=None, to_date=None):
     search_range = DateRange(from_date, to_date)
