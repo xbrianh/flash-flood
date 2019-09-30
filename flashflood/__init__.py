@@ -81,9 +81,9 @@ class FlashFlood:
 
     def delete(self, event_id):
         """
-        Write delete marker for event. Raises `FlashFloodEventNotFound` if event doesn't exist
+        Write delete marker for event.
         """
-        journal_id = self._journal_for_event(event_id)
+        self._journal_for_event(event_id)  # raises FlashFloodEventNotFound if event not found
         self._upload_update_action(event_id, "delete")
 
     def _upload_update_action(self, event_id, action, new_event_data=b""):
