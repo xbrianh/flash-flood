@@ -71,7 +71,7 @@ class _EmptyDateRange(DateRange):
     def contains(self, *args, **kwargs):
         return False
 
-_S3_BATCH_DELETE_MAX_KEYS=1000
+_S3_BATCH_DELETE_MAX_KEYS = 1000
 
 def delete_keys(bucket, keys):
     def _delete(keys_to_delete):
