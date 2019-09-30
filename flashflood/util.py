@@ -71,9 +71,11 @@ class _EmptyDateRange(DateRange):
     def contains(self, *args, **kwargs):
         return False
 
+_S3_BATCH_DELETE_MAX_KEYS=1000
+
 def delete_keys(bucket, keys):
     def _delete(keys_to_delete):
-        assert 1000 >= len(keys_to_delete)
+        assert _S3_BATCH_DELETE_MAX_KEYS >= len(keys_to_delete)
         objects = [dict(Key=key) for key in keys_to_delete]
         bucket.delete_objects(Delete=dict(Objects=objects))
 
@@ -81,13 +83,13 @@ def delete_keys(bucket, keys):
         with ThreadPoolExecutor(max_workers=10) as e:
             futures = list()
             while keys:
-                futures.append(e.submit(_delete, keys[:1000]))
-                keys = keys[1000:]
+                futures.append(e.submit(_delete, keys[:_S3_BATCH_DELETE_MAX_KEYS]))
+                keys = keys[_S3_BATCH_DELETE_MAX_KEYS:]
             for f in as_completed(futures):
                 f.result()
 
 class S3Deleter(AbstractContextManager):
-    def __init__(self, bucket, deletion_threshold=5000):
+    def __init__(self, bucket, deletion_threshold=5 * _S3_BATCH_DELETE_MAX_KEYS):
         self.bucket = bucket
         self.deletion_threshold = deletion_threshold
         self._keys = list()
