@@ -97,7 +97,7 @@ class S3Deleter(AbstractContextManager):
     def delete(self, key):
         self._keys.append(key)
         if self.deletion_threshold <= len(self._keys):
-            delete_keys(self._keys)
+            delete_keys(self.bucket, self._keys)
             self._keys = list()
 
     def __exit__(self, *args, **kwargs):
