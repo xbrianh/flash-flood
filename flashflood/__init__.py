@@ -156,7 +156,7 @@ class FlashFlood:
         if minimum_size > size:
             raise FlashFloodJournalingError(f"Journal condition: minimum_size={minimum_size}")
         manifest = self.combine_journals(journals_to_combine)
-        print("Created new journal {manifest['journal_id']}")
+        print("Created new journal", manifest['journal_id'])
 
     def combine_journals(self, journals_to_combine):
         events = list()
