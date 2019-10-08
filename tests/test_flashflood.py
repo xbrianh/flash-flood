@@ -146,8 +146,6 @@ class TestFlashFlood(unittest.TestCase):
                     break
             self.assertEqual(len(dates) - 2, len(retrieved_events))
 
-    # TODO: and DateRange tests
-
     def test_url_range(self):
         """
         Partial date requests should download only a range of the journal

@@ -1,5 +1,5 @@
 import datetime
-from collections import namedtuple
+from string import hexdigits
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 
@@ -73,14 +73,14 @@ class _EmptyDateRange(DateRange):
 
 _S3_BATCH_DELETE_MAX_KEYS = 1000
 
-def delete_keys(bucket, keys):
+def delete_keys(bucket, keys, number_of_workers=4):
     def _delete(keys_to_delete):
         assert _S3_BATCH_DELETE_MAX_KEYS >= len(keys_to_delete)
         objects = [dict(Key=key) for key in keys_to_delete]
         bucket.delete_objects(Delete=dict(Objects=objects))
 
     if keys:
-        with ThreadPoolExecutor(max_workers=10) as e:
+        with ThreadPoolExecutor(max_workers=number_of_workers) as e:
             futures = list()
             while keys:
                 futures.append(e.submit(_delete, keys[:_S3_BATCH_DELETE_MAX_KEYS]))
@@ -89,16 +89,32 @@ def delete_keys(bucket, keys):
                 f.result()
 
 class S3Deleter(AbstractContextManager):
-    def __init__(self, bucket, deletion_threshold=5 * _S3_BATCH_DELETE_MAX_KEYS):
+    def __init__(self, bucket, deletion_threshold=5 * _S3_BATCH_DELETE_MAX_KEYS, number_of_workers=4):
         self.bucket = bucket
         self.deletion_threshold = deletion_threshold
         self._keys = list()
+        self.number_of_workers = number_of_workers
 
     def delete(self, key):
         self._keys.append(key)
         if self.deletion_threshold <= len(self._keys):
-            delete_keys(self._keys)
+            delete_keys(self._keys, number_of_workers=self.number_of_workers)
             self._keys = list()
 
     def __exit__(self, *args, **kwargs):
         delete_keys(self.bucket, self._keys)
+
+def concurrent_listing(bucket, prefixes, number_of_workers=4):
+    """
+    Concurrently list objects from `bucket` for `prefixes`. Lexicographical ordering is lost.
+    """
+    assert not isinstance(prefixes, str)
+
+    def _list(pfx):
+        return [item for item in bucket.objects.filter(Prefix=pfx)]
+
+    with ThreadPoolExecutor(max_workers=number_of_workers) as e:
+        futures = [e.submit(_list, f"{pfx}") for pfx in prefixes]
+        for f in as_completed(futures):
+            for item in f.result():
+                yield item
