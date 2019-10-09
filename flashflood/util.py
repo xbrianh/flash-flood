@@ -111,6 +111,7 @@ def concurrent_listing(bucket, prefixes, number_of_workers=4):
     assert not isinstance(prefixes, str)
 
     def _list(pfx):
+        # TDOD: handle or limit unbounded listing into memory
         return [item for item in bucket.objects.filter(Prefix=pfx)]
 
     with ThreadPoolExecutor(max_workers=number_of_workers) as e:
