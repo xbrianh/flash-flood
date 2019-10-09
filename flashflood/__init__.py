@@ -100,9 +100,9 @@ class FlashFlood:
             try:
                 journal_id = self._journal_for_event(event_id)
             except FlashFloodEventNotFound:
-                # TODO: delete this marker!
                 continue
             self._update_journal(journal_id, event_id, action, item.key)
+            print(f"Updated journal {journal_id}")
 
     def _update_journal(self, journal_id, event_id, action, update_marker_key):
         with S3Deleter(self.bucket) as s3d:
@@ -155,7 +155,8 @@ class FlashFlood:
             raise FlashFloodJournalingError(f"Journal condition: minimum_number_of_events={minimum_number_of_events}")
         if minimum_size > size:
             raise FlashFloodJournalingError(f"Journal condition: minimum_size={minimum_size}")
-        return self.combine_journals(journals_to_combine)
+        manifest = self.combine_journals(journals_to_combine)
+        print("Created new journal", manifest['journal_id'])
 
     def combine_journals(self, journals_to_combine):
         events = list()
