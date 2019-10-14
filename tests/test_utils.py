@@ -18,6 +18,9 @@ from tests import infra
 
 
 class TestUtils(unittest.TestCase):
+    bucket: typing.Any = None
+    root_pfx: typing.Optional[str] = None
+
     @classmethod
     def setUpClass(cls):
         cls.root_pfx = f"flashflood-test-utils-{uuid4()}"
