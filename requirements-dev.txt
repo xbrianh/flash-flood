@@ -2,4 +2,5 @@ flake8
 coverage
 httpie
 twine
+mypy
 -r requirements.txt

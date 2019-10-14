@@ -1,51 +1,37 @@
 import io
 from datetime import datetime
 import json
+import typing
 import requests
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import namedtuple
 
 from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange, S3Deleter
+from flashflood.objects import BaseJournal, BaseJournalUpdate
+from flashflood.identifiers import JournalID, TOMBSTONE_SUFFIX
+from flashflood.event import Event
+from flashflood.key_index import BaseKeyIndex
+from flashflood.exceptions import FlashFloodEventNotFound, FlashFloodJournalingError
 
 
-Event = namedtuple("Event", "event_id date data")
-_Journal = namedtuple("_Journal", "id_ manifest body")
+# TODO:
+# What happens if event updates are written for a journal that has been removed?
+#
+# It's possible to resolve journals for update markers that are out-of-date using the event index
+#
+# Event updates should be applied idempotently
+#
+# write tests for multiple updates/deletes to the same event
+# Create resolution policy for multiple updates/deletes to the same event
+#
+# Use bucket lifecycle policy for garbage collection
+# Warn if policy is not set upon FF instantiation
+#
+# Include size/len(events) metadat in journal listing?
 
-class _JournalID(str):
-    DELIMITER = "--"
-
-    @classmethod
-    def make(cls, start_timestamp, end_timestamp, blob_id):
-        end_timestamp = end_timestamp or "new"
-        return cls(start_timestamp + cls.DELIMITER + end_timestamp + cls.DELIMITER + blob_id)
-
-    @classmethod
-    def from_key(cls, key):
-        return cls(key.rsplit("/", 1)[1])
-
-    def _parts(self):
-        start_timestamp, end_timestamp, blob_id = self.split(self.DELIMITER)
-        return start_timestamp, end_timestamp, blob_id
-
-    @property
-    def blob_id(self):
-        return self._parts()[2]
-
-    @property
-    def start_date(self):
-        return datetime_from_timestamp(self._parts()[0])
-
-    @property
-    def end_date(self):
-        end_date = self._parts()[1]
-        if "new" == end_date:
-            return self.start_date
-        else:
-            return datetime_from_timestamp(end_date)
 
 class FlashFlood:
-    def __init__(self, s3_resource, bucket, root_prefix):
+    def __init__(self, s3_resource: typing.Any, bucket: str, root_prefix: str):
         self.s3 = s3_resource
         self.bucket = self.s3.Bucket(bucket)
         if root_prefix.endswith("/"):
@@ -53,257 +39,188 @@ class FlashFlood:
         self.root_prefix = root_prefix
         self._journal_pfx = f"{root_prefix}/journals"
         self._blobs_pfx = f"{root_prefix}/blobs"
-        self._new_pfx = f"{root_prefix}/new"
         self._update_pfx = f"{root_prefix}/update"
         self._index_pfx = f"{root_prefix}/index"
 
-    def put(self, data, event_id: str=None, date: datetime=None):
+        class _Journal(BaseJournal):
+            bucket = self.bucket
+            _journal_pfx = self._journal_pfx
+            _blobs_pfx = self._blobs_pfx
+
+        class _JournalUpdate(BaseJournalUpdate):
+            bucket = self.bucket
+            _pfx = self._update_pfx
+
+        class _KeyIndex(BaseKeyIndex):
+            bucket = self.bucket
+            _pfx = self._index_pfx
+
+        self._Journal = _Journal
+        self._JournalUpdate = _JournalUpdate
+        self._KeyIndex = _KeyIndex
+
+    def put(self, data, event_id: str=None, date: datetime=None) -> Event:
         """
         Write new event. If event exists, write update marker for event.
         """
         date = date or datetime.utcnow()
         timestamp = datetime_to_timestamp(date)
         event_id = event_id or str(uuid4())
-        assert _JournalID.DELIMITER not in event_id
+        assert JournalID.DELIMITER not in event_id
         if self.event_exists(event_id):
-            self._upload_update_action(event_id, "update", data)
+            journal_id = self._journal_for_event(event_id)
+            self._JournalUpdate.upload_update(journal_id, event_id, data)
             return Event(event_id, None, data)
         else:
-            blob_id = str(uuid4())
-            journal_id = _JournalID.make(timestamp, None, blob_id)
-            manifest = dict(journal_id=journal_id,
-                            from_date=timestamp,
-                            to_date=timestamp,
-                            size=len(data),
-                            events=[dict(event_id=event_id, timestamp=timestamp, offset=0, size=len(data))])
-            self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(data)), is_new=True)
+            events = [dict(event_id=event_id, timestamp=timestamp, offset=0, size=len(data))]
+            journal = self._Journal(events, data=data, version="new")
+            journal.upload()
+            self._index_journal(journal)
+            print("new journal", journal.id_)
             return Event(event_id, date, data)
 
-    def delete(self, event_id):
+    def _index_journal(self, journal: BaseJournal):
+        journal_id = journal.id_
+        self._KeyIndex.put_batch({e['event_id']: journal_id for e in journal.events})
+
+    def delete(self, event_id: str):
         """
         Write delete marker for event.
         """
-        self._journal_for_event(event_id)  # raises FlashFloodEventNotFound if event not found
-        self._upload_update_action(event_id, "delete")
+        journal_id = self._journal_for_event(event_id)
+        self._JournalUpdate.upload_delete(journal_id, event_id)
+        # Deindexing immediately means the event is not available for lookup, but it will still appear in replay.
+        self._KeyIndex.delete(event_id)
 
-    def _upload_update_action(self, event_id, action, new_event_data=b""):
-        key = f"{self._update_pfx}/{event_id}{_JournalID.DELIMITER}{action}"
-        self.bucket.Object(key).upload_fileobj(io.BytesIO(new_event_data))
-
-    def update(self):
+    def update(self, number_of_updates_to_apply: int=1000) -> int:
         """
         Apply updates for each update and delete marker.
         """
-        for item in self.bucket.objects.filter(Prefix=self._update_pfx):
-            update_id = item.key.rsplit("/", 1)[1]
-            event_id, action = update_id.rsplit(_JournalID.DELIMITER, 1)
-            try:
-                journal_id = self._journal_for_event(event_id)
-            except FlashFloodEventNotFound:
-                continue
-            self._update_journal(journal_id, event_id, action, item.key)
-            print(f"Updated journal {journal_id}")
+        count = 0
+        for journal_id, updates in self._JournalUpdate.get_updates_for_all_journals():
+            print("updating journal", journal_id)
+            journal = self._Journal.from_id(journal_id)
+            new_journal = journal.updated(updates)
+            if new_journal != journal:
+                if not new_journal.is_empty:
+                    new_journal.upload()
+                    self._index_journal(new_journal)
+                journal.delete()
+            for u in updates.values():
+                u.delete()
+            count += len(updates)
+            if number_of_updates_to_apply <= count:
+                break
+        return count
 
-    def _update_journal(self, journal_id, event_id, action, update_marker_key):
-        with S3Deleter(self.bucket) as s3d:
-            journal = self._get_journal(journal_id)
-            journal_data = b""
-            events = list()
-            for e in journal.manifest['events']:
-                event_data = journal.body.read(e['size'])
-                e['offset'] = len(journal_data)
-                if event_id != e['event_id']:
-                    journal_data += event_data
-                    events.append(e)
-                elif "update" == action:
-                    event_data = self.bucket.Object(update_marker_key).get()['Body'].read()
-                    journal_data += event_data
-                    e['size'] = len(event_data)
-                    events.append(e)
-                elif "delete" == action:
-                    s3d.delete(f"{self._index_pfx}/{e['event_id']}")
-                else:
-                    raise Exception(f"No handler for journal update '{action}'")
-            if not journal_data:
-                self._delete_journals([journal.id_])
-            else:
-                from_timestamp = events[0]['timestamp']
-                to_timestamp = events[-1]['timestamp']
-                if from_timestamp == to_timestamp:
-                    to_timestamp = "new"
-                journal.manifest['events'] = events
-                journal.manifest['size'] = len(journal_data)
-                journal.manifest['from_date'] = from_timestamp
-                journal.manifest['to_date'] = to_timestamp
-                new_journal_id = _JournalID.make(from_timestamp, to_timestamp, journal.id_.blob_id)
-                self._upload_journal(_Journal(new_journal_id, journal.manifest, io.BytesIO(journal_data)))
-                if new_journal_id != journal_id:
-                    s3d.delete(f"{self._journal_pfx}/{journal_id}")
-
-    def journal(self, minimum_number_of_events=100, minimum_size=None):
-        assert 2 <= minimum_number_of_events
+    def journal(self, minimum_number_of_events: int=100, minimum_size: int=None):
         minimum_size = minimum_size or 0
-        journals_to_combine = list()
         number_of_events, size = 0, 0
-        for journal in self._new_journals():
-            size += journal.manifest['size']
-            number_of_events += len(journal.manifest['events'])
+        journals_to_combine = list()
+        for journal_id in self._new_journals():
+            journal = self._Journal.from_id(journal_id)
+            size += journal.size
+            number_of_events += len(journal.events)
             journals_to_combine.append(journal)
+            print("Found journal to combine", journal.id_)
             if minimum_number_of_events <= number_of_events and minimum_size <= size:
                 break
         if minimum_number_of_events > number_of_events:
             raise FlashFloodJournalingError(f"Journal condition: minimum_number_of_events={minimum_number_of_events}")
         if minimum_size > size:
             raise FlashFloodJournalingError(f"Journal condition: minimum_size={minimum_size}")
-        manifest = self.combine_journals(journals_to_combine)
-        print("Created new journal", manifest['journal_id'])
+        self.combine_journals(journals_to_combine)
 
-    def combine_journals(self, journals_to_combine):
-        events = list()
-        combined_data = b""
+    def _new_journals(self) -> typing.Iterator[JournalID]:
+        for journal_id in self._Journal.list():
+            if "new" == journal_id.version:
+                yield journal_id
+
+    def combine_journals(self, journals_to_combine: typing.List[BaseJournal]) -> BaseJournal:
+        new_journal = self._Journal()
+        objects_to_delete = journals_to_combine.copy()
         for journal in journals_to_combine:
-            for e in journal.manifest['events']:
-                events.append({**e, **dict(offset=len(combined_data))})
-            combined_data += journal.body.read()
-        blob_id = str(uuid4())
-        journal_id = _JournalID.make(events[0]['timestamp'], events[-1]['timestamp'], blob_id)
-        manifest = dict(journal_id=journal_id,
-                        from_date=events[0]['timestamp'],
-                        to_date=events[-1]['timestamp'],
-                        size=len(combined_data),
-                        events=events)
-        self._upload_journal(_Journal(journal_id, manifest, io.BytesIO(combined_data)))
-        self._delete_journals([journal.id_ for journal in journals_to_combine])
-        return manifest
+            print("combining journal", journal.id_)
+            updates = self._JournalUpdate.get_updates_for_journal(journal.id_)
+            objects_to_delete.extend(list(updates.values()))
+            journal = journal.updated(updates)
+            for e in journal.events:
+                new_offset = e['offset'] + len(new_journal.data)
+                new_journal.events.append({**e, **dict(offset=new_offset)})
+            new_journal.data += journal.body.read()
+        if not new_journal.is_empty:
+            new_journal.upload()
+            self._index_journal(new_journal)
+        for o in objects_to_delete:
+            o.delete()
+        return new_journal
 
-    def replay(self, from_date=None, to_date=None):
+    def replay(self, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[Event]:
         search_range = DateRange(from_date, to_date)
-        for journal_id in self._journal_ids(from_date, to_date):
-            journal = self._get_journal(journal_id)
-            for item in journal.manifest['events']:
+        for journal_id in self.list_journals(from_date, to_date):
+            print("replaying from journal", journal_id)
+            journal = self._Journal.from_id(journal_id)
+            for item in journal.events:
                 event_date = datetime_from_timestamp(item['timestamp'])
                 if event_date in search_range:
                     yield Event(item['event_id'], event_date, journal.body.read(item['size']))
                 elif event_date in search_range.future:
                     break
 
-    def _journal_for_event(self, event_id):
-        try:
-            key = next(iter(self.bucket.objects.filter(Prefix=f"{self._index_pfx}/{event_id}"))).key
-        except StopIteration:
-            raise FlashFloodEventNotFound()
-        return _JournalID(self.bucket.Object(key).metadata['journal_id'])
-
-    def _lookup_event(self, event_id):
-        journal_id = self._journal_for_event(event_id)
-        manifest = self._get_manifest(journal_id)
-        for item in manifest['events']:
-            if event_id == item['event_id']:
-                break
+    def _journal_for_event(self, event_id: str) -> JournalID:
+        journal_id = self._KeyIndex.get(event_id)
+        if journal_id is None:
+            raise FlashFloodEventNotFound(f"journal not found for {event_id}")
         else:
-            raise FlashFloodException(f"Event {event_id} not found in {journal_id}")
-        return journal_id, manifest, item
+            return journal_id
 
-    def event_exists(self, event_id):
-        try:
-            self._journal_for_event(event_id)
-            return True
-        except FlashFloodEventNotFound:
-            return False
+    def event_exists(self, event_id: str) -> bool:
+        return self._KeyIndex.get(event_id) is not None
 
-    def get_event(self, event_id):
-        journal_id, manifest, item = self._lookup_event(event_id)
-        blob_key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        byte_range = f"bytes={item['offset']}-{item['offset'] + item['size'] - 1}"
-        data = self.bucket.Object(blob_key).get(Range=byte_range)['Body'].read()
-        return Event(event_id, datetime_from_timestamp(item['timestamp']), data)
+    def get_event(self, event_id: str) -> Event:
+        journal_id = self._journal_for_event(event_id)
+        journal = self._Journal.from_id(journal_id)
+        return journal.get_event(event_id)
 
-    def replay_urls(self, from_date=None, to_date=None, maximum_number_of_results=1):
-        urls = list()
-        for journal_id in self._journal_ids(from_date, to_date):
-            manifest = self._get_manifest(journal_id)
-            journal_url = self._generate_presigned_url(journal_id)
-            urls.append(dict(manifest=manifest, events=journal_url))
-            if len(urls) == maximum_number_of_results:
-                break
-        return urls
-
-    def _upload_journal(self, journal, is_new=False):
-        key = f"{self._journal_pfx}/{journal.id_}"
-        blob_key = f"{self._blobs_pfx}/{journal.id_.blob_id}"
-        self.bucket.Object(blob_key).upload_fileobj(journal.body,
-                                                    ExtraArgs=dict(Metadata=dict(journal_id=journal.id_)))
-        self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(journal.manifest).encode("utf-8")))
-        if is_new:
-            self.bucket.Object(f"{self._new_pfx}/{journal.id_}").upload_fileobj(io.BytesIO(b""))
-        for item in journal.manifest['events']:
-            key = f"{self._index_pfx}/{item['event_id']}"
-            self.bucket.Object(key).upload_fileobj(io.BytesIO(b""),
-                                                   ExtraArgs=dict(Metadata=dict(journal_id=journal.id_)))
-
-    def _get_manifest(self, journal_id):
-        key = f"{self._journal_pfx}/{journal_id}"
-        return json.loads(self.bucket.Object(key).get()['Body'].read().decode("utf-8"))
-
-    def _get_journal(self, journal_id):
+    def _generate_presigned_url(self, journal_id: JournalID):
         key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        body = self.bucket.Object(key).get()['Body']
-        return _Journal(journal_id, self._get_manifest(journal_id), body)
+        client = self.s3.meta.client
+        return client.generate_presigned_url(ClientMethod="get_object",
+                                             Params=dict(Bucket=self.bucket.name, Key=key))
 
-    def _new_journals(self):
-        for item in self.bucket.objects.filter(Prefix=self._new_pfx):
-            yield self._get_journal(_JournalID.from_key(item.key))
-
-    def _generate_presigned_url(self, journal_id):
-        key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        return self.s3.meta.client.generate_presigned_url(ClientMethod="get_object",
-                                                          Params=dict(Bucket=self.bucket.name, Key=key))
-
-    def _delete_journals(self, journal_ids):
-        with S3Deleter(self.bucket) as s3d:
-            for journal_id in journal_ids:
-                s3d.delete(f"{self._journal_pfx}/{journal_id}")
-                s3d.delete(f"{self._blobs_pfx}/{journal_id.blob_id}")
-                s3d.delete(f"{self._new_pfx}/{journal_id}")
-
-    def _journal_ids(self, from_date=None, to_date=None):
-        # TODO: heuristic to find from_date in bucket listing -xbrianh
+    def list_journals(self, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[JournalID]:
         search_range = DateRange(from_date, to_date)
-        for item in self.bucket.objects.filter(Prefix=self._journal_pfx):
-            journal_id = _JournalID.from_key(item.key)
+        for journal_id in self._Journal.list():
             journal_range = DateRange(journal_id.start_date, journal_id.end_date)
             if journal_range in search_range:
                 yield journal_id
             elif journal_id.start_date in search_range.future:
                 break
 
+    def list_manifests(self,
+                       from_date: datetime=None,
+                       to_date: datetime=None) -> typing.Iterator[typing.Mapping[str, typing.Any]]:
+        for journal_id in self.list_journals(from_date, to_date):
+            manifest = self._Journal.from_id(journal_id).manifest()
+            manifest['data_url'] = self._generate_presigned_url(journal_id)
+            yield manifest
+
     def _destroy(self):
         with S3Deleter(self.bucket) as s3d:
             for item in self.bucket.objects.filter(Prefix=f"{self.root_prefix}/"):
                 s3d.delete(item.key)
 
-def replay_with_urls(url_info, from_date=None, to_date=None):
+def replay_with_manifest(manifest: dict, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[Event]:
     search_range = DateRange(from_date, to_date)
-    for urls in url_info:
-        manifest = urls['manifest']
-        for event_info in manifest['events']:
-            if datetime_from_timestamp(event_info['timestamp']) in search_range:
-                break
-        byte_range = f"bytes={event_info['offset']}-{manifest['size']-1}"
-        resp = requests.get(urls['events'], headers=dict(Range=byte_range), stream=True)
-        resp.raise_for_status()
-        for item in manifest['events']:
-            event_date = datetime_from_timestamp(item['timestamp'])
-            if event_date in search_range:
-                yield Event(item['event_id'], event_date, resp.raw.read(item['size']))
-            elif event_date in search_range.future:
-                break
-
-class FlashFloodException(Exception):
-    pass
-
-class FlashFloodJournalingError(FlashFloodException):
-    pass
-
-class FlashFloodEventNotFound(FlashFloodException):
-    pass
+    for event_info in manifest['events']:
+        if datetime_from_timestamp(event_info['timestamp']) in search_range:
+            break
+    byte_range = f"bytes={event_info['offset']}-{manifest['size']-1}"
+    resp = requests.get(manifest['data_url'], headers=dict(Range=byte_range), stream=True)
+    resp.raise_for_status()
+    for item in manifest['events']:
+        event_date = datetime_from_timestamp(item['timestamp'])
+        if event_date in search_range:
+            yield Event(item['event_id'], event_date, resp.raw.read(item['size']))
+        elif event_date in search_range.future:
+            break

@@ -1,10 +1,13 @@
-.PHONY: test lint tests clean build install
+.PHONY: test lint mypy tests clean build install
 MODULES=flashflood tests
 
-test: lint tests
+test: lint mypy tests
 
 lint:
 	flake8 $(MODULES) *.py
+
+mypy:
+	mypy --ignore-missing-imports $(MODULES)
 
 tests:
 	PYTHONWARNINGS=ignore:ResourceWarning coverage run --source=flashflood \
