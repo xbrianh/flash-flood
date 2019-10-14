@@ -1,3 +1,5 @@
+import time
+import typing
 import datetime
 from string import hexdigits
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +12,9 @@ def datetime_to_timestamp(dt):
 
 def datetime_from_timestamp(ts):
     return datetime.datetime.strptime(ts, "%Y-%m-%dT%H%M%S.%fZ")
+
+def timestamp_now():
+    return datetime_to_timestamp(datetime.datetime.utcnow())
 
 class DateRange:
     def __init__(self, start: datetime.datetime=None, end: datetime.datetime=None):
@@ -39,7 +44,7 @@ class DateRange:
         """
         return self.start < date and date <= self.end
 
-    def __contains__(self, item: datetime.datetime):
+    def __contains__(self, item: typing.Any):
         if isinstance(item, datetime.datetime):
             return self.contains(item)
         elif isinstance(item, type(self)):
@@ -97,9 +102,6 @@ class S3Deleter(AbstractContextManager):
 
     def delete(self, key):
         self._keys.append(key)
-        if self.deletion_threshold <= len(self._keys):
-            delete_keys(self._keys, number_of_workers=self.number_of_workers)
-            self._keys = list()
 
     def __exit__(self, *args, **kwargs):
         delete_keys(self.bucket, self._keys)
