@@ -197,28 +197,28 @@ class FlashFlood:
             elif journal_id.start_date in search_range.future:
                 break
 
-    def list_manifests(self,
-                       from_date: datetime=None,
-                       to_date: datetime=None) -> typing.Iterator[typing.Mapping[str, typing.Any]]:
+    def list_event_streams(self,
+                           from_date: datetime=None,
+                           to_date: datetime=None) -> typing.Iterator[typing.Mapping[str, typing.Any]]:
         for journal_id in self.list_journals(from_date, to_date):
-            manifest = self._Journal.from_id(journal_id).manifest()
-            manifest['data_url'] = self._generate_presigned_url(journal_id)
-            yield manifest
+            event_stream = self._Journal.from_id(journal_id).manifest()
+            event_stream['stream_url'] = self._generate_presigned_url(journal_id)
+            yield event_stream
 
     def _destroy(self):
         with S3Deleter(self.bucket) as s3d:
             for item in self.bucket.objects.filter(Prefix=f"{self.root_prefix}/"):
                 s3d.delete(item.key)
 
-def replay_with_manifest(manifest: dict, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[Event]:
+def replay_event_stream(event_stream: dict, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[Event]:
     search_range = DateRange(from_date, to_date)
-    for event_info in manifest['events']:
+    for event_info in event_stream['events']:
         if datetime_from_timestamp(event_info['timestamp']) in search_range:
             break
-    byte_range = f"bytes={event_info['offset']}-{manifest['size']-1}"
-    resp = requests.get(manifest['data_url'], headers=dict(Range=byte_range), stream=True)
+    byte_range = f"bytes={event_info['offset']}-{event_stream['size']-1}"
+    resp = requests.get(event_stream['stream_url'], headers=dict(Range=byte_range), stream=True)
     resp.raise_for_status()
-    for item in manifest['events']:
+    for item in event_stream['events']:
         event_date = datetime_from_timestamp(item['timestamp'])
         if event_date in search_range:
             yield Event(item['event_id'], event_date, resp.raw.read(item['size']))

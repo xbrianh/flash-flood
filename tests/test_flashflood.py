@@ -189,9 +189,9 @@ class TestFlashFlood(unittest.TestCase):
             from_date = ordered_dates[0]
             to_date = ordered_dates[-2]
             retrieved_events = list()
-            for manifest in self.flashflood.list_manifests(from_date, to_date):
+            for manifest in self.flashflood.list_event_streams(from_date, to_date):
                 new_retrieved_events = list()
-                for event in flashflood.replay_with_manifest(manifest, from_date, to_date):
+                for event in flashflood.replay_event_stream(manifest, from_date, to_date):
                     self.assertGreater(event.date, from_date)
                     new_retrieved_events.append(event)
                 retrieved_events.extend(new_retrieved_events)
@@ -208,8 +208,8 @@ class TestFlashFlood(unittest.TestCase):
         events = sorted([e for e in events.values()], key=lambda e: e.date)
         from_date = events[3].date
         retrieved_events = [event
-                            for manifest in self.flashflood.list_manifests(from_date)
-                            for event in flashflood.replay_with_manifest(manifest, from_date)]
+                            for manifest in self.flashflood.list_event_streams(from_date)
+                            for event in flashflood.replay_event_stream(manifest, from_date)]
         for event in events[:4]:
             self.assertNotIn(event, retrieved_events)
         for event in events[4:]:
@@ -227,13 +227,13 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("Should succeed when minimum number and size thresholds are met"):
             self.flashflood.journal(minimum_number_of_events=5, minimum_size=5)
 
-    def test_urls(self):
+    def test_event_streams(self):
         events = dict()
         events.update(self.generate_events())
         events.update(self.generate_events())
         retrieved_events = {event.event_id: event
-                            for manifest in self.flashflood.list_manifests()
-                            for event in flashflood.replay_with_manifest(manifest)}
+                            for event_stream in self.flashflood.list_event_streams()
+                            for event in flashflood.replay_event_stream(event_stream)}
         for event_id in events:
             self.assertEqual(events[event_id].data, retrieved_events[event_id].data)
 
