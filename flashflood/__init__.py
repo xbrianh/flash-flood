@@ -7,11 +7,11 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flashflood.util import datetime_to_timestamp, datetime_from_timestamp, DateRange, S3Deleter
-from flashflood.objects import BaseJournal, BaseJournalUpdate
+from flashflood.objects import Event, BaseJournal, BaseJournalUpdate
 from flashflood.identifiers import JournalID, TOMBSTONE_SUFFIX
-from flashflood.event import Event
 from flashflood.key_index import BaseKeyIndex
-from flashflood.exceptions import FlashFloodEventNotFound, FlashFloodJournalingError
+from flashflood.exceptions import (FlashFloodException, FlashFloodEventNotFound, FlashFloodEventExistsError,
+                                   FlashFloodJournalingError)
 
 
 # TODO:
@@ -60,17 +60,13 @@ class FlashFlood:
         self._KeyIndex = _KeyIndex
 
     def put(self, data, event_id: str=None, date: datetime=None) -> Event:
-        """
-        Write new event. If event exists, write update marker for event.
-        """
         date = date or datetime.utcnow()
         timestamp = datetime_to_timestamp(date)
         event_id = event_id or str(uuid4())
-        assert JournalID.DELIMITER not in event_id
+        if JournalID.DELIMITER in event_id:
+            raise FlashFloodException(f"'{JournalID.DELIMITER}' not allowed in event_id")
         if self.event_exists(event_id):
-            journal_id = self._journal_for_event(event_id)
-            self._JournalUpdate.upload_update(journal_id, event_id, data)
-            return Event(event_id, None, data)
+            raise FlashFloodEventExistsError(f"Event {event_id} already exists")
         else:
             events = [dict(event_id=event_id, timestamp=timestamp, offset=0, size=len(data))]
             journal = self._Journal(events, data=data, version="new")
@@ -83,7 +79,14 @@ class FlashFlood:
         journal_id = journal.id_
         self._KeyIndex.put_batch({e['event_id']: journal_id for e in journal.events})
 
-    def delete(self, event_id: str):
+    def update_event(self, event_id: str, new_data: bytes):
+        if self.event_exists(event_id):
+            journal_id = self._journal_for_event(event_id)
+            self._JournalUpdate.upload_update(journal_id, event_id, new_data)
+        else:
+            raise FlashFloodEventNotFound(f"Event {event_id} not found")
+
+    def delete_event(self, event_id: str):
         """
         Write delete marker for event.
         """

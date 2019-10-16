@@ -1,6 +1,7 @@
 import io
 import json
 import typing
+from datetime import datetime
 from uuid import uuid4
 from string import hexdigits
 from collections import defaultdict, OrderedDict
@@ -8,9 +9,14 @@ from collections import defaultdict, OrderedDict
 from botocore.exceptions import ClientError
 
 from flashflood.util import datetime_from_timestamp, timestamp_now, S3Deleter
-from flashflood.event import Event
 from flashflood.exceptions import FlashFloodException, FlashFloodEventNotFound, FlashFloodJournalUploadError
 from flashflood.identifiers import JournalID, JournalUpdateID, JournalUpdateAction, TOMBSTONE_SUFFIX
+
+
+class Event(typing.NamedTuple):
+    event_id: str
+    date: datetime
+    data: bytes
 
 
 class BaseJournalUpdate:

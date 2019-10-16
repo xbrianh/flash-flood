@@ -13,7 +13,7 @@ sys.path.insert(0, pkg_root)  # noqa
 
 import flashflood
 from flashflood.util import datetime_from_timestamp, delete_keys
-from flashflood.exceptions import FlashFloodEventNotFound
+from flashflood.exceptions import FlashFloodException, FlashFloodEventNotFound, FlashFloodEventExistsError
 from tests import infra, random_date
 
 
@@ -34,6 +34,18 @@ class TestFlashFlood(unittest.TestCase):
 
     def tearDown(self):
         self.flashflood._destroy()
+
+    def test_put_and_update_event_exceptions(self):
+        events = self.generate_events(1, journal=False)
+        with self.subTest("Should not be able to put event_id with illegal chars"):
+            with self.assertRaises(FlashFloodException):
+                self.flashflood.put(b"", "asldkfj--lasjf")
+        with self.subTest("Should not be able to put an existing event"):
+            with self.assertRaises(FlashFloodEventExistsError):
+                self.flashflood.put(b"", next(iter(events.values())).event_id)
+        with self.subTest("Should not be able to update a non-existent event"):
+            with self.assertRaises(FlashFloodEventNotFound):
+                self.flashflood.update_event(str(uuid4()), b"")
 
     def test_get_event(self):
         events = self.generate_events(10, journal=False)
@@ -61,7 +73,7 @@ class TestFlashFlood(unittest.TestCase):
             events = self.generate_events(number_of_events, journal=True)
             event_id = set(events.keys()).pop()
             new_event_data = self._random_data()
-            self.flashflood.put(new_event_data, event_id)
+            self.flashflood.update_event(event_id, new_event_data)
             self._find_event_test(event_id, events[event_id].data)
             self.flashflood.update()
             self._find_event_test(event_id, new_event_data)
@@ -70,7 +82,7 @@ class TestFlashFlood(unittest.TestCase):
             events = self.generate_events(number_of_events, journal=False)
             event_id = set(events.keys()).pop()
             new_event_data = self._random_data()
-            self.flashflood.put(new_event_data, event_id)
+            self.flashflood.update_event(event_id, new_event_data)
             self._find_event_test(event_id, events[event_id].data)
             self.flashflood.journal(minimum_number_of_events=number_of_events)
             self._find_event_test(event_id, new_event_data)
@@ -78,7 +90,7 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("Test delete event"):
             events = self.generate_events(number_of_events, journal=True)
             event_id = set(events.keys()).pop()
-            self.flashflood.delete(event_id)
+            self.flashflood.delete_event(event_id)
             self._find_event_test(event_id, should_find_event_in_replay=True, should_find_event_in_lookup=False)
             self.flashflood.update()
             self._find_event_test(event_id, should_find_event_in_replay=False, should_find_event_in_lookup=False)
@@ -86,7 +98,7 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("Test delete new event"):
             events = self.generate_events(number_of_events, journal=False)
             event_id = set(events.keys()).pop()
-            self.flashflood.delete(event_id)
+            self.flashflood.delete_event(event_id)
             self._find_event_test(event_id, should_find_event_in_replay=True, should_find_event_in_lookup=False)
             self.flashflood.journal(minimum_number_of_events=number_of_events)
             self._find_event_test(event_id, should_find_event_in_replay=False, should_find_event_in_lookup=False)
@@ -134,7 +146,7 @@ class TestFlashFlood(unittest.TestCase):
         for _ in range(number_of_updates):
             event_id = [event_id for event_id in events][randint(0, len(events) - 1)]
             new_event_data[event_id] = self._random_data()
-            self.flashflood.put(new_event_data[event_id], event_id)
+            self.flashflood.update_event(event_id, new_event_data[event_id])
         if 0 < number_of_events_to_journal:
             self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal // 2)
             self.flashflood.update()
@@ -152,7 +164,7 @@ class TestFlashFlood(unittest.TestCase):
             event_id = [event_id for event_id in events][randint(0, len(events) - 1)]
             deleted_events.append(event_id)
             del events[event_id]
-            self.flashflood.delete(event_id)
+            self.flashflood.delete_event(event_id)
         if 0 < number_of_events_to_journal:
             self.flashflood.journal(minimum_number_of_events=number_of_events_to_journal // 2)
             self.flashflood.update()

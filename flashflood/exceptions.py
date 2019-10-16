@@ -4,6 +4,9 @@ class FlashFloodException(Exception):
 class FlashFloodJournalingError(FlashFloodException):
     pass
 
+class FlashFloodEventExistsError(FlashFloodException):
+    pass
+
 class FlashFloodEventNotFound(FlashFloodException):
     pass
 
