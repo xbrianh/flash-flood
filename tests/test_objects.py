@@ -141,6 +141,22 @@ class TestObjects(unittest.TestCase):
             self.assertEqual(e.data, self.event_data[event_id])
 
     def test_list_journals(self):
+        """
+        Test that journals are listed omitting old versions and tombstones.
+        For example, the following journal ids
+        A--version1
+        A--version1.dead
+        A--version2
+        B--version1
+        B--version1.dead
+        C--version1
+        C--version2
+        D--version1
+        should be listed as:
+        A--version2
+        C--version2
+        D--version1
+        """
         pfx = f"{self.root_pfx}/test_list_journals"
         journal_ids = list()
         latest_journal_ids = dict()
@@ -165,8 +181,14 @@ class TestObjects(unittest.TestCase):
             _journal_pfx = pfx
             _blob_pfx = self.Journal._blob_pfx
 
-        self.assertEqual([latest_journal_ids[key] for key in sorted(latest_journal_ids)],
-                         [id_ for id_ in Journal.list()])
+        with self.subTest("Test listing all Journals"):
+            expected_ids = sorted(latest_journal_ids.values())
+            self.assertEqual(expected_ids, [id_ for id_ in Journal.list()])
+
+        with self.subTest("Test listing journals with starting from journal id"):
+            index = randint(1, len(expected_ids) - 2)
+            start = expected_ids[index]
+            self.assertEqual(expected_ids[1 + index:], [id_ for id_ in Journal.list(start=start)])
 
     def test_journal_update_properties(self):
         journal = self.journal

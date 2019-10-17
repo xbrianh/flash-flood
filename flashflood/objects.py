@@ -273,10 +273,13 @@ class BaseJournal:
         return [f"{self._journal_pfx}/{id_}", f"{self._blobs_pfx}/{id_.blob_id}"]
 
     @classmethod
-    def list(cls) -> typing.Iterator[JournalID]:
+    def list(cls, start: JournalID=None) -> typing.Iterator[JournalID]:
         # TODO: heuristic to find from_date in bucket listing -xbrianh
         journal_info: dict = dict(range_prefix=None, journal_ids=list())
-        for item in cls.bucket.objects.filter(Prefix=cls._journal_pfx):
+        kwargs = dict(Prefix=cls._journal_pfx)
+        if start is not None:
+            kwargs['Marker'] = f"{cls._journal_pfx}/{start}"
+        for item in cls.bucket.objects.filter(**kwargs):
             journal_id = JournalID.from_key(item.key)
             if journal_id.range_prefix != journal_info['range_prefix']:
                 if journal_info['journal_ids']:
