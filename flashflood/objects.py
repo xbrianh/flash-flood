@@ -273,12 +273,16 @@ class BaseJournal:
         return [f"{self._journal_pfx}/{id_}", f"{self._blobs_pfx}/{id_.blob_id}"]
 
     @classmethod
-    def list(cls, start: JournalID=None) -> typing.Iterator[JournalID]:
+    def list(cls, list_from: JournalID=None) -> typing.Iterator[JournalID]:
+        """
+        List the latest non-tombstoned version of each journal.
+        if `list_from` is provided, listing will begin after `list_from`.
+        """
         # TODO: heuristic to find from_date in bucket listing -xbrianh
         journal_info: dict = dict(range_prefix=None, journal_ids=list())
         kwargs = dict(Prefix=cls._journal_pfx)
-        if start is not None:
-            kwargs['Marker'] = f"{cls._journal_pfx}/{start}"
+        if list_from is not None:
+            kwargs['Marker'] = f"{cls._journal_pfx}/{list_from}"
         for item in cls.bucket.objects.filter(**kwargs):
             journal_id = JournalID.from_key(item.key)
             if journal_id.range_prefix != journal_info['range_prefix']:

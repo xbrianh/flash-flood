@@ -185,10 +185,10 @@ class TestObjects(unittest.TestCase):
             expected_ids = sorted(latest_journal_ids.values())
             self.assertEqual(expected_ids, [id_ for id_ in Journal.list()])
 
-        with self.subTest("Test listing starting from known journal id"):
+        with self.subTest("Test listing after known journal id"):
             index = randint(1, len(expected_ids) - 2)
-            start = expected_ids[index]
-            self.assertEqual(expected_ids[1 + index:], [id_ for id_ in Journal.list(start=start)])
+            list_from = expected_ids[index]
+            self.assertEqual(expected_ids[1 + index:], [id_ for id_ in Journal.list(list_from=list_from)])
 
     def test_journal_update_properties(self):
         journal = self.journal
