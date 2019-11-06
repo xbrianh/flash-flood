@@ -7,6 +7,8 @@ from contextlib import AbstractContextManager
 
 import boto3
 
+from flashflood import config
+
 def datetime_to_timestamp(dt):
     return dt.strftime("%Y-%m-%dT%H%M%S.%fZ")
 
@@ -121,3 +123,26 @@ def concurrent_listing(bucket, prefixes, number_of_workers=4):
         for f in as_completed(futures):
             for item in f.result():
                 yield item
+
+def upload_object(s3_client: typing.Any,
+                  bucket: str,
+                  key: str,
+                  data: bytes=b"",
+                  tagging: typing.Optional[typing.Dict[str, str]]=None,
+                  metadata: typing.Optional[typing.Dict[str, str]]=None) -> bool:
+    """
+    Upload an object to s3.
+    Return `True` if upload was verified, otherwise `False`
+    """
+    kwargs = dict(Bucket=bucket, Key=key, Body=data)
+    if tagging:
+        kwargs['Tagging'] = "&".join([f"{k}={v}" for k, v in tagging.items()])
+    if metadata:
+        kwargs['Metadata'] = metadata
+    s3_client.put_object(**kwargs)
+    if config.object_exists_waiter_config['Delay']:
+        waiter = s3_client.get_waiter("object_exists")
+        waiter.wait(Bucket=bucket, Key=key, WaiterConfig=config.object_exists_waiter_config)
+        return True
+    else:
+        return False

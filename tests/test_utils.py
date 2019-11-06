@@ -13,7 +13,7 @@ import boto3
 pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noqa
 sys.path.insert(0, pkg_root)  # noqa
 
-from flashflood.util import concurrent_listing, delete_keys, S3Deleter
+from flashflood.util import concurrent_listing, delete_keys, S3Deleter, upload_object, config
 from tests import infra
 
 
@@ -62,6 +62,28 @@ class TestUtils(unittest.TestCase):
             if listed_keys.intersection(keys):
                 time.sleep(6)
         self.assertEqual(0, len(listed_keys.intersection(keys)))
+
+    def test_upload_object(self):
+        with self.subTest("Test upload without verification"):
+            self._test_upload_object(False)
+        with self.subTest("Test upload with verification"):
+            self._test_upload_object(True)
+
+    def _test_upload_object(self, verify: bool):
+        config.object_exists_waiter_config['Delay'] = int(verify)
+        s3_client = boto3.client("s3")
+        tagging = dict(foo="bar", doom="gloom")
+        metadata = dict(sed="awk", perl="ruby")
+        key = f"{self.root_pfx}/{uuid4()}"
+        data = os.urandom(2)
+        verified = upload_object(s3_client, self.bucket.name, key, data, tagging, metadata)
+        obj = self.bucket.Object(key)
+        self.assertEqual(verify, verified)
+        self.assertEqual(obj.metadata, metadata)
+        self.assertEqual(obj.get()['Body'].read(), data)
+        self.assertEqual(tagging,
+                         {tag['Key']: tag['Value']
+                          for tag in s3_client.get_object_tagging(Bucket=self.bucket.name, Key=key)['TagSet']})
 
     def _upload_objects(self, number_of_objects: int=10) -> typing.List[str]:
         keys = [f"{self.root_pfx}/{uuid4()}" for _ in range(number_of_objects)]
