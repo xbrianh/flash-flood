@@ -152,7 +152,7 @@ class TestFlashFlood(unittest.TestCase):
                         del expected_events[event.event_id]
             if not expected_events:
                 return
-            time.sleep(0.5)
+            time.sleep(1.0)
         self.fail("Expected events did not appear correctly in event replay")
 
     def _test_update(self, events, number_of_updates=2, number_of_events_to_journal=0):
