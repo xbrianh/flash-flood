@@ -13,18 +13,21 @@ import boto3
 pkg_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # noqa
 sys.path.insert(0, pkg_root)  # noqa
 
-from flashflood.util import concurrent_listing, delete_keys, S3Deleter, upload_object, config
+from flashflood import config
+from flashflood.util import concurrent_listing, delete_keys, S3Deleter, upload_object, update_object_tagging
 from tests import infra
 
 
 class TestUtils(unittest.TestCase):
     bucket: typing.Any = None
+    s3_client: typing.Any = None
     root_pfx: typing.Optional[str] = None
 
     @classmethod
     def setUpClass(cls):
         cls.root_pfx = f"flashflood-test-utils-{uuid4()}"
         cls.s3 = boto3.resource("s3")
+        cls.s3_client = cls.s3.meta.client
         cls.bucket = cls.s3.Bucket(infra.get_env("S3_BUCKET"))
 
     @classmethod
@@ -71,19 +74,26 @@ class TestUtils(unittest.TestCase):
 
     def _test_upload_object(self, verify: bool):
         config.object_exists_waiter_config['Delay'] = int(verify)
-        s3_client = boto3.client("s3")
         tagging = dict(foo="bar", doom="gloom")
         metadata = dict(sed="awk", perl="ruby")
         key = f"{self.root_pfx}/{uuid4()}"
         data = os.urandom(2)
-        verified = upload_object(s3_client, self.bucket.name, key, data, tagging, metadata)
+        verified = upload_object(self.s3_client, self.bucket.name, key, data, tagging, metadata)
         obj = self.bucket.Object(key)
         self.assertEqual(verify, verified)
         self.assertEqual(obj.metadata, metadata)
         self.assertEqual(obj.get()['Body'].read(), data)
-        self.assertEqual(tagging,
-                         {tag['Key']: tag['Value']
-                          for tag in s3_client.get_object_tagging(Bucket=self.bucket.name, Key=key)['TagSet']})
+        self.assertEqual(tagging, self._get_tagging(key))
+
+    def test_update_object_tagging(self):
+        key = self._upload_objects(1)[0]
+        tagging = dict(foo="bar")
+        update_object_tagging(self.s3_client, self.bucket.name, key, tagging)
+        self.assertEqual(tagging, self._get_tagging(key))
+
+    def _get_tagging(self, key):
+        tagset = self.s3_client.get_object_tagging(Bucket=self.bucket.name, Key=key)['TagSet']
+        return {tag['Key']: tag['Value'] for tag in tagset}
 
     def _upload_objects(self, number_of_objects: int=10) -> typing.List[str]:
         keys = [f"{self.root_pfx}/{uuid4()}" for _ in range(number_of_objects)]

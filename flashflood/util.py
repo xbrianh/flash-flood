@@ -146,3 +146,10 @@ def upload_object(s3_client: typing.Any,
         return True
     else:
         return False
+
+def update_object_tagging(s3_client: typing.Any,
+                          bucket: str,
+                          key: str,
+                          tagging: typing.Dict[str, str]):
+    tagset = [dict(Key=k, Value=v) for k, v in tagging.items()]
+    s3_client.put_object_tagging(Bucket=bucket, Key=key, Tagging=dict(TagSet=tagset))
