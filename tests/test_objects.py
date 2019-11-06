@@ -112,11 +112,11 @@ class TestObjects(unittest.TestCase):
 
     def test_journal_delete(self):
         journal = self.Journal.from_key(self.journal.upload())
-        with self.subTest("Should be able to delete uploaded journal"):
-            journal.delete()
-        with self.subTest("Should NOT be able to delete non-uploaded journal"):
+        with self.subTest("Should be able to tombstone uploaded journal"):
+            journal.upload_tombstone()
+        with self.subTest("Should NOT be able to tombstone non-uploaded journal"):
             with self.assertRaises(FlashFloodException):
-                self.Journal().delete()
+                self.Journal().upload_tombstone()
 
     def test_journal_get(self):
         key = self.journal.upload()

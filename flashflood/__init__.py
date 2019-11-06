@@ -111,9 +111,9 @@ class FlashFlood:
                 if not new_journal.is_empty:
                     new_journal.upload()
                     self._index_journal(new_journal)
-                journal.delete()
+                journal.upload_tombstone()
             for u in updates.values():
-                u.delete()
+                u.upload_tombstone()
             count += len(updates)
             if number_of_updates_to_apply <= count:
                 break
@@ -158,7 +158,7 @@ class FlashFlood:
             new_journal.upload()
             self._index_journal(new_journal)
         for o in objects_to_delete:
-            o.delete()
+            o.upload_tombstone()
         return new_journal
 
     def replay(self, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[Event]:

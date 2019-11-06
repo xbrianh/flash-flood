@@ -8,7 +8,7 @@ from collections import defaultdict, OrderedDict
 
 from botocore.exceptions import ClientError
 
-from flashflood.util import datetime_from_timestamp, timestamp_now, S3Deleter
+from flashflood.util import datetime_from_timestamp, timestamp_now, S3Deleter, upload_object, update_object_tagging
 from flashflood.exceptions import FlashFloodException, FlashFloodEventNotFound, FlashFloodJournalUploadError
 from flashflood.identifiers import JournalID, JournalUpdateID, JournalUpdateAction, TOMBSTONE_SUFFIX
 
@@ -51,7 +51,7 @@ class BaseJournalUpdate:
 
     def _upload(self, data: bytes):
         key = f"{self._pfx}/{self.id_}"
-        self.bucket.Object(key).upload_fileobj(io.BytesIO(data))
+        upload_object(self.s3_client, self.bucket.name, key, data)
 
     @property
     def journal_id(self) -> JournalID:
@@ -80,13 +80,19 @@ class BaseJournalUpdate:
         else:
             return self._data
 
-    def delete(self):
+    def upload_tombstone(self) -> JournalUpdateID:
+        """
+        Mark journal update as deleted by uploading a tombstone.
+        """
         key = f"{self._pfx}/{self.id_}"
         try:
             next(iter(self.bucket.objects.filter(Prefix=key)))
         except StopIteration:
             raise FlashFloodException(f"Cannot delete non-existent object {key}")
-        self.bucket.Object(key=f"{key}{TOMBSTONE_SUFFIX}").upload_fileobj(io.BytesIO(b""))
+        tombstone_id = JournalUpdateID(f"{self.id_}{TOMBSTONE_SUFFIX}")
+        upload_object(self.s3_client, self.bucket.name, f"{self._pfx}/{tombstone_id}", tagging=dict(garbage="true"))
+        update_object_tagging(self.s3_client, self.bucket.name, key, dict(garbage="true"))
+        return tombstone_id
 
     @classmethod
     def list_out_of_date_journals(cls) -> typing.Iterator[JournalID]:
@@ -257,23 +263,33 @@ class BaseJournal:
             blob_key = f"{self._blobs_pfx}/{self.blob_id}"
             self.bucket.Object(blob_key).upload_fileobj(self.body, ExtraArgs=dict(Metadata=dict(journal_id=self.id_)))
             key = f"{self._journal_pfx}/{self.id_}"
-            metadata = dict(number_of_events=f"{len(self.events)}",
-                            journal_data_size=f"{len(self.data)}")
-            self.bucket.Object(key).upload_fileobj(io.BytesIO(json.dumps(manifest).encode("utf-8")),
-                                                   ExtraArgs=dict(Metadata=metadata))
+            metadata = dict(number_of_events=f"{len(self.events)}", journal_data_size=f"{len(self.data)}")
+            upload_object(self.s3_client,
+                          self.bucket.name,
+                          key,
+                          json.dumps(manifest).encode("utf-8"), metadata=metadata)
             self.reload()  # make self._body available to for read again
             print("Uploaded journal", self.id_)
         else:
             raise FlashFloodJournalUploadError("Cannot upload journal with no events")
         return key
 
-    def delete(self):
+    def upload_tombstone(self) -> JournalID:
+        """
+        Mark journal as deleted by uploading a tombstone.
+        """
         key = f"{self._journal_pfx}/{self.id_}"
         try:
             next(iter(self.bucket.objects.filter(Prefix=key)))
         except StopIteration:
             raise FlashFloodException(f"Cannot delete non-existent object {key}")
-        self.bucket.Object(key=f"{key}{TOMBSTONE_SUFFIX}").upload_fileobj(io.BytesIO(b""))
+        tombstone_id = JournalID(f"{self.id_}{TOMBSTONE_SUFFIX}")
+        upload_object(self.s3_client,
+                      self.bucket.name,
+                      f"{self._journal_pfx}/{tombstone_id}",
+                      tagging=dict(garbage="true"))
+        update_object_tagging(self.s3_client, self.bucket.name, key, dict(garbage="true"))
+        return tombstone_id
 
     def keys(self):
         id_ = self.id_
