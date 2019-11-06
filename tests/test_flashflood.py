@@ -5,6 +5,7 @@ from uuid import uuid4
 import unittest
 import boto3
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from random import randint
 
@@ -136,10 +137,23 @@ class TestFlashFlood(unittest.TestCase):
         with self.subTest("Delete event after journaling"):
             self._test_delete(events, number_of_events_to_journal=4)
         with self.subTest("Replay after event update"):
+            self._test_replay(expected_events=events)
+
+    def _test_replay(self, expected_events, number_of_retries=5):
+        """
+        Remove replayed events from `expected_events` until empty. Fail otherwise.
+        Retry to avoid failing due to s3 eventual consistency.
+        """
+        expected_events = expected_events.copy()
+        for _ in range(number_of_retries):
             for event in self.flashflood.replay():
-                self.assertEqual(event.data, events[event.event_id].data)
-                del events[event.event_id]
-            self.assertEqual(0, len(events))
+                if event.event_id in expected_events:
+                    if event.data == expected_events[event.event_id].data:
+                        del expected_events[event.event_id]
+            if not expected_events:
+                return
+            time.sleep(0.5)
+        self.fail("Expected events did not appear correctly in event replay")
 
     def _test_update(self, events, number_of_updates=2, number_of_events_to_journal=0):
         new_event_data = dict()
