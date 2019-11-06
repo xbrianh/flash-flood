@@ -33,6 +33,7 @@ from flashflood.exceptions import (FlashFloodException, FlashFloodEventNotFound,
 class FlashFlood:
     def __init__(self, s3_resource: typing.Any, bucket: str, root_prefix: str):
         self.s3 = s3_resource
+        self.s3_client = s3_resource.meta.client
         self.bucket = self.s3.Bucket(bucket)
         if root_prefix.endswith("/"):
             raise ValueError("Root prefix cannot end with `/`")
@@ -44,11 +45,13 @@ class FlashFlood:
 
         class _Journal(BaseJournal):
             bucket = self.bucket
+            s3_client = self.s3_client
             _journal_pfx = self._journal_pfx
             _blobs_pfx = self._blobs_pfx
 
         class _JournalUpdate(BaseJournalUpdate):
             bucket = self.bucket
+            s3_client = self.s3_client
             _pfx = self._update_pfx
 
         class _KeyIndex(BaseKeyIndex):
@@ -187,9 +190,8 @@ class FlashFlood:
 
     def _generate_presigned_url(self, journal_id: JournalID):
         key = f"{self._blobs_pfx}/{journal_id.blob_id}"
-        client = self.s3.meta.client
-        return client.generate_presigned_url(ClientMethod="get_object",
-                                             Params=dict(Bucket=self.bucket.name, Key=key))
+        return self.s3_client.generate_presigned_url(ClientMethod="get_object",
+                                                     Params=dict(Bucket=self.bucket.name, Key=key))
 
     def list_journals(self, from_date: datetime=None, to_date: datetime=None) -> typing.Iterator[JournalID]:
         search_range = DateRange(from_date, to_date)

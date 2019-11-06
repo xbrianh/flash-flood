@@ -33,11 +33,13 @@ class TestObjects(unittest.TestCase):
 
         class Journal(BaseJournal):
             bucket = cls.bucket
+            s3_client = cls.s3.meta.client
             _journal_pfx = f"{cls.root_pfx}/journals"
-            _blob_pfx = f"{cls.root_pfx}/blobs"
+            _blobs_pfx = f"{cls.root_pfx}/blobs"
 
         class JournalUpdate(BaseJournalUpdate):
             bucket = cls.bucket
+            s3_client = cls.s3.meta.client
             _pfx = f"{cls.root_pfx}/updates"
 
         cls.Journal = Journal
@@ -178,8 +180,9 @@ class TestObjects(unittest.TestCase):
 
         class Journal(BaseJournal):
             bucket = self.bucket
+            s3_client = self.Journal.s3_client
             _journal_pfx = pfx
-            _blob_pfx = self.Journal._blob_pfx
+            _blobs_pfx = self.Journal._blobs_pfx
 
         with self.subTest("Test listing all Journals"):
             expected_ids = sorted(latest_journal_ids.values())
@@ -202,6 +205,7 @@ class TestObjects(unittest.TestCase):
     def test_list_journal_updates(self):
         class JournalUpdate(BaseJournalUpdate):
             bucket = self.bucket
+            s3_client = self.Journal.s3_client
             _pfx = f"{self.root_pfx}/test_list_updates"
 
         living_updates, _ = self._generate_and_upload_test_updates(JournalUpdate._pfx)

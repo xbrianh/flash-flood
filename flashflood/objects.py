@@ -21,11 +21,14 @@ class Event(typing.NamedTuple):
 
 class BaseJournalUpdate:
     bucket: typing.Any = None
+    s3_client: typing.Any = None
     _pfx: typing.Optional[str] = None
 
     def __init__(self, update_id: JournalUpdateID):
         self.id_ = update_id
         self._data: typing.Optional[bytes] = None
+        assert self.s3_client
+        assert self._pfx
 
     @classmethod
     def make(cls, journal_id: JournalID, event_id: str, action: JournalUpdateAction):
@@ -134,6 +137,7 @@ class BaseJournalUpdate:
 
 class BaseJournal:
     bucket: typing.Any = None
+    s3_client: typing.Any = None
     _journal_pfx: typing.Optional[str] = None
     _blobs_pfx: typing.Optional[str] = None
 
@@ -144,6 +148,9 @@ class BaseJournal:
         self._body: typing.Optional[typing.BinaryIO] = None
         self._location = "memory"
         self.version = version or timestamp_now()
+        assert self.s3_client
+        assert self._journal_pfx
+        assert self._blobs_pfx
 
     @classmethod
     def from_key(cls, key: str):
