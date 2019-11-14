@@ -1,7 +1,10 @@
 from datetime import datetime
 from random import randint
 
+from flashflood import config
 from flashflood.util import datetime_from_timestamp
+
+config.object_exists_waiter_config['Delay'] = 1
 
 def random_date() -> datetime:
     year = "%04i" % randint(1000, 2019)
