@@ -309,8 +309,9 @@ class BaseJournal:
         for item in cls.bucket.objects.filter(**kwargs):
             journal_id = JournalID.from_key(item.key)
             if journal_id.range_prefix != journal_info['range_prefix']:
-                if journal_info['journal_ids']:
-                    yield journal_info['journal_ids'][-1]
+                for id_ in journal_info['journal_ids']:
+                    if id_.version == journal_info['journal_ids'][-1].version:
+                        yield id_
                 journal_info['range_prefix'] = journal_id.range_prefix
                 journal_info['journal_ids'] = [journal_id]
             else:

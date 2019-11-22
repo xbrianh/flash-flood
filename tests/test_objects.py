@@ -6,7 +6,7 @@ import time
 import typing
 from datetime import datetime, timedelta
 from uuid import uuid4
-from random import randint
+from random import random, randint
 from collections import defaultdict
 import unittest
 
@@ -154,29 +154,15 @@ class TestObjects(unittest.TestCase):
         C--version1
         C--version2
         D--version1
+        E--new
+        E--new
         should be listed as:
         A--version2
         C--version2
         D--version1
         """
         pfx = f"{self.root_pfx}/test_list_journals"
-        journal_ids = list()
-        latest_journal_ids = dict()
-        for _ in range(20):
-            start_date = random_date()
-            end_date = start_date + timedelta(seconds=1)
-            for _ in range(randint(1, 5)):
-                journal_id = JournalID.make(datetime_to_timestamp(start_date),
-                                            datetime_to_timestamp(end_date),
-                                            timestamp_now(),
-                                            str(uuid4()))
-                self.bucket.Object(key=f"{pfx}/{journal_id}").upload_fileobj(io.BytesIO(b""))
-                journal_ids.append(journal_id)
-                if 1 == randint(1, 4):
-                    self.bucket.Object(key=f"{pfx}/{journal_id}{TOMBSTONE_SUFFIX}").upload_fileobj(io.BytesIO(b""))
-                    journal_ids.append(f"{journal_id}{TOMBSTONE_SUFFIX}")
-                else:
-                    latest_journal_ids[journal_id.range_prefix] = journal_id
+        expected_ids = self._upload_random_journal_ids(pfx)
 
         class Journal(BaseJournal):
             bucket = self.bucket
@@ -185,13 +171,48 @@ class TestObjects(unittest.TestCase):
             _blobs_pfx = self.Journal._blobs_pfx
 
         with self.subTest("Test listing all Journals"):
-            expected_ids = sorted(latest_journal_ids.values())
             self.assertEqual(expected_ids, [id_ for id_ in Journal.list()])
 
         with self.subTest("Test listing after known journal id"):
             index = randint(1, len(expected_ids) - 2)
             list_from = expected_ids[index]
             self.assertEqual(expected_ids[1 + index:], [id_ for id_ in Journal.list(list_from=list_from)])
+
+    def _upload_random_journal_ids(self, pfx) -> typing.List[JournalID]:
+        expected_journal_id_listing = list()
+
+        def _upload(journal_id) -> bool:
+            is_tombstoned = 0.33 > random()
+            self.bucket.Object(key=f"{pfx}/{journal_id}").upload_fileobj(io.BytesIO(b""))
+            if is_tombstoned:
+                self.bucket.Object(key=f"{pfx}/{journal_id}{TOMBSTONE_SUFFIX}").upload_fileobj(io.BytesIO(b""))
+            return is_tombstoned
+
+        for _ in range(20):
+            date = random_date()
+            start_timestamp = datetime_to_timestamp(date)
+            end_timestamp = datetime_to_timestamp(date + timedelta(seconds=1))
+            latest_journal_id_version = None
+            number_of_versions = randint(1, 5)
+            for _ in range(number_of_versions):
+                journal_id = JournalID.make(start_timestamp, end_timestamp, timestamp_now(), str(uuid4()))
+                is_tombstoned = _upload(journal_id)
+                if not is_tombstoned:
+                    latest_journal_id_version = journal_id
+            if latest_journal_id_version is not None:
+                expected_journal_id_listing.append(latest_journal_id_version)
+
+        for _ in range(10):
+            date = random_date()
+            event_timestamp = datetime_to_timestamp(date)
+            number_of_simulteneous_new_events = randint(1, 3)
+            for _ in range(number_of_simulteneous_new_events):
+                journal_id = JournalID.make(event_timestamp, event_timestamp, "new", str(uuid4()))
+                is_tombstoned = _upload(journal_id)
+                if not is_tombstoned:
+                    expected_journal_id_listing.append(journal_id)
+
+        return sorted(expected_journal_id_listing)
 
     def test_journal_update_properties(self):
         journal = self.journal
