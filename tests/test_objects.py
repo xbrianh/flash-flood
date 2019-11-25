@@ -154,12 +154,16 @@ class TestObjects(unittest.TestCase):
         C--version1
         C--version2
         D--version1
-        E--new
-        E--new
+        E--new-a
+        E--new-b
+        E--new-b.dead
+        E--new-c
         should be listed as:
         A--version2
         C--version2
         D--version1
+        E--new-a
+        E--new-c
         """
         pfx = f"{self.root_pfx}/test_list_journals"
         expected_ids = self._upload_random_journal_ids(pfx)
