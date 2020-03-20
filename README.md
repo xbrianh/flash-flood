@@ -30,7 +30,7 @@ ff.get_event(my_event_id)
 
 Update event data
 ```
-ff.update_event(my_new_event_data, my_event_id)
+ff.update_event(my_event_id, my_new_event_data)
 ```
 
 Replay (stream) events
