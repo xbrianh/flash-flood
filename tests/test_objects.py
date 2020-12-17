@@ -187,7 +187,8 @@ class TestObjects(unittest.TestCase):
 
         def _upload(journal_id) -> bool:
             is_tombstoned = 0.33 > random()
-            self.bucket.Object(key=f"{pfx}/{journal_id}").upload_fileobj(io.BytesIO(b""))
+            if (not is_tombstoned) or (0.5 > random()):
+                self.bucket.Object(key=f"{pfx}/{journal_id}").upload_fileobj(io.BytesIO(b""))
             if is_tombstoned:
                 self.bucket.Object(key=f"{pfx}/{journal_id}{TOMBSTONE_SUFFIX}").upload_fileobj(io.BytesIO(b""))
             return is_tombstoned

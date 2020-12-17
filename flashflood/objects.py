@@ -313,10 +313,17 @@ class BaseJournal:
                     if id_.version == journal_info['journal_ids'][-1].version:
                         yield id_
                 journal_info['range_prefix'] = journal_id.range_prefix
-                journal_info['journal_ids'] = [journal_id]
+                if not journal_id.endswith(TOMBSTONE_SUFFIX):
+                    journal_info['journal_ids'] = [journal_id]
+                else:
+                    journal_info['journal_ids'] = []
             else:
                 if journal_id.endswith(TOMBSTONE_SUFFIX):
-                    journal_info['journal_ids'].remove(journal_id.replace(TOMBSTONE_SUFFIX, ""))
+                    try:
+                        journal_info['journal_ids'].remove(journal_id.replace(TOMBSTONE_SUFFIX, ""))
+                    except ValueError:
+                        # This is a tombstone where the underlying object has been deleted
+                        pass
                 else:
                     journal_info['journal_ids'].append(journal_id)
         if journal_info['journal_ids']:
